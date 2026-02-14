@@ -1,0 +1,2 @@
+ALTER TABLE vpn_peers DROP COLUMN IF EXISTS node_id;
+DROP TABLE IF EXISTS vpn_nodes;

@@ -1,0 +1,229 @@
+# MAIN — hub-сервер с Traefik, HA
+# Запуск: ./run.sh (из корня проекта)
+#
+# Traefik :80 → /api, /.well-known, /federation, /health → server
+#                    → / → web
+# Готово к работе с первого запуска (HTTP).
+# Для HTTPS: настройте LETSENCRYPT_EMAIL и раскомментируйте в traefik/traefik.yml
+
+services:
+  traefik:
+    image: traefik:v3.6
+    command:
+      - "--configFile=/etc/traefik/traefik.yml"
+    networks:
+      - default
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8082:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - traefik_letsencrypt:/letsencrypt
+      - traefik_dynamic:/etc/traefik/dynamic
+    depends_on:
+      - server
+      - web
+    environment:
+      - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL:-}
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-messenger}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-messenger}
+    command: >
+      postgres
+      -c wal_level=replica
+      -c max_wal_senders=3
+      -c max_replication_slots=3
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/01-replicator.sql:/docker-entrypoint-initdb.d/01-replicator.sql:ro
+      - ./postgres/02-pg-hba-append.sh:/docker-entrypoint-initdb.d/02-pg-hba.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U messenger"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  server:
+    build:
+      context: ../..
+      dockerfile: server/Dockerfile
+    volumes:
+      - server_data:/data
+    environment:
+      SERVER_DOMAIN: ${SERVER_DOMAIN}
+      JWT_SECRET: ${JWT_SECRET}
+      FEDERATION_KEYS_DIR: /data
+      DATABASE_URL: postgres://${POSTGRES_USER:-messenger}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-messenger}?sslmode=disable
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: ${S3_BUCKET:-messenger-media}
+      REDIS_URL: redis://redis:6379
+      REDIS_DISABLED: "false"
+      DB_ENCRYPTION_KEY: ${DB_ENCRYPTION_KEY:-}
+      VPN_XRAY_API_ADDR: xray:10085
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=main_default"
+      - "traefik.http.middlewares.secure-headers.headers.contenttypenosniff=true"
+      - "traefik.http.middlewares.secure-headers.headers.framedeny=true"
+      - "traefik.http.middlewares.secure-headers.headers.referrerpolicy=strict-origin-when-cross-origin"
+      - "traefik.http.middlewares.hsts.headers.stsseconds=31536000"
+      - "traefik.http.middlewares.hsts.headers.stsincludesubdomains=true"
+      - "traefik.http.middlewares.hsts.headers.stspreload=true"
+      - "traefik.http.middlewares.hsts.headers.forcestsheader=true"
+      - "traefik.http.routers.api.rule=Host(`${SERVER_DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/.well-known/federation`) || PathPrefix(`/federation`) || PathPrefix(`/health`))"
+      - "traefik.http.routers.api.entrypoints=web"
+      - "traefik.http.routers.api.priority=100"
+      - "traefik.http.routers.api.service=api"
+      - "traefik.http.routers.api.middlewares=secure-headers"
+      - "traefik.http.routers.api-secure.rule=Host(`${SERVER_DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/.well-known/federation`) || PathPrefix(`/federation`) || PathPrefix(`/health`))"
+      - "traefik.http.routers.api-secure.entrypoints=websecure"
+      - "traefik.http.routers.api-secure.priority=100"
+      - "traefik.http.routers.api-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.api-secure.service=api"
+      - "traefik.http.routers.api-secure.middlewares=secure-headers,hsts"
+      - "traefik.http.services.api.loadbalancer.server.port=8080"
+      - "traefik.http.services.api.loadbalancer.passhostheader=true"
+      - "traefik.http.services.api.loadbalancer.responseforwarding.flushinterval=1ms"
+
+  server2:
+    restart: unless-stopped
+    build:
+      context: ../..
+      dockerfile: server/Dockerfile
+    volumes:
+      - server_data:/data
+    environment:
+      SERVER_DOMAIN: ${SERVER_DOMAIN}
+      JWT_SECRET: ${JWT_SECRET}
+      FEDERATION_KEYS_DIR: /data
+      DATABASE_URL: postgres://${POSTGRES_USER:-messenger}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-messenger}?sslmode=disable
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: ${S3_BUCKET:-messenger-media}
+      REDIS_URL: redis://redis:6379
+      REDIS_DISABLED: "false"
+      DB_ENCRYPTION_KEY: ${DB_ENCRYPTION_KEY:-}
+      VPN_XRAY_API_ADDR: xray:10085
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=main_default"
+      - "traefik.http.routers.api.rule=Host(`${SERVER_DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/.well-known/federation`) || PathPrefix(`/federation`) || PathPrefix(`/health`))"
+      - "traefik.http.routers.api.entrypoints=web"
+      - "traefik.http.routers.api.priority=100"
+      - "traefik.http.routers.api.service=api"
+      - "traefik.http.routers.api.middlewares=secure-headers"
+      - "traefik.http.routers.api-secure.rule=Host(`${SERVER_DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/.well-known/federation`) || PathPrefix(`/federation`) || PathPrefix(`/health`))"
+      - "traefik.http.routers.api-secure.entrypoints=websecure"
+      - "traefik.http.routers.api-secure.priority=100"
+      - "traefik.http.routers.api-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.api-secure.service=api"
+      - "traefik.http.routers.api-secure.middlewares=secure-headers,hsts"
+      - "traefik.http.services.api.loadbalancer.server.port=8080"
+      - "traefik.http.services.api.loadbalancer.passhostheader=true"
+
+  web:
+    build:
+      context: ../..
+      dockerfile: web/Dockerfile
+    environment:
+      VITE_API_PROXY_TARGET: http://server:8080
+    depends_on:
+      - server
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.web.rule=Host(`${SERVER_DOMAIN}`) && PathPrefix(`/`)"
+      - "traefik.http.routers.web.entrypoints=web"
+      - "traefik.http.routers.web.priority=1"
+      - "traefik.http.routers.web.middlewares=secure-headers"
+      - "traefik.http.routers.web-secure.rule=Host(`${SERVER_DOMAIN}`) && PathPrefix(`/`)"
+      - "traefik.http.routers.web-secure.entrypoints=websecure"
+      - "traefik.http.routers.web-secure.priority=1"
+      - "traefik.http.routers.web-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.web-secure.service=web"
+      - "traefik.http.routers.web-secure.middlewares=secure-headers,hsts"
+      - "traefik.http.services.web.loadbalancer.server.port=80"
+
+  postgres-replica:
+    build:
+      context: ./postgres
+      dockerfile: Dockerfile.replica
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-messenger}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-messenger}
+      PGPASSWORD: repl_password
+    volumes:
+      - postgres_replica_data:/var/lib/postgresql/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U messenger"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - ha
+
+  xray:
+    build:
+      context: ../..
+      dockerfile: xray/Dockerfile
+    restart: unless-stopped
+    volumes:
+      - ../../xray/config.json:/etc/xray/config.json:ro
+      - xray_certs:/etc/xray
+    networks:
+      - default
+
+volumes:
+  postgres_data:
+  postgres_replica_data:
+  minio_data:
+  redis_data:
+  server_data:
+  xray_certs:
+  traefik_letsencrypt:
+  traefik_dynamic:

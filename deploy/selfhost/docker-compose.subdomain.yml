@@ -1,0 +1,21 @@
+# Subdomain mode — gateway на :9080 для приёма трафика от main Traefik по VPN
+# Используется вместе с docker-compose.yml (без docker-compose.traefik.yml)
+# SERVER_DOMAIN будет subdomain.main_domain (например 1-2-3-4.astralrelay.online)
+
+services:
+  gateway:
+    image: nginx:alpine
+    ports:
+      - "9080:9080"
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - server
+      - web
+    networks:
+      - default
+
+  server:
+    ports: []
+  web:
+    ports: []

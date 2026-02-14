@@ -1,0 +1,26 @@
+# Traefik — статическая конфигурация
+# HTTP :80, HTTPS :443 (сертификат Let's Encrypt при заданном LETSENCRYPT_EMAIL в .env)
+
+api:
+  dashboard: true
+  insecure: true
+
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+
+# Для HTTPS замените email на свой (или задайте LETSENCRYPT_EMAIL в .env и подставьте вручную)
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: "admin@astralrelay.online"
+      storage: "/letsencrypt/acme.json"
+      httpChallenge:
+        entryPoint: web
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false

@@ -1,0 +1,108 @@
+# DEV — локальная разработка и тестирование
+# Запуск: ./run.sh (из корня проекта) или: docker compose -f deploy/dev/docker-compose.yml up -d
+#
+# Публикует порты postgres, redis, minio, xray для отладки. НЕ для продакшена.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-messenger}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-messenger_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-messenger}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U messenger"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  server:
+    build:
+      context: ../..
+      dockerfile: server/Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - server_data:/data
+    environment:
+      SERVER_DOMAIN: ${SERVER_DOMAIN:-localhost}
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-production}
+      FEDERATION_KEYS_DIR: /data
+      DATABASE_URL: postgres://${POSTGRES_USER:-messenger}:${POSTGRES_PASSWORD:-messenger_dev}@postgres:5432/${POSTGRES_DB:-messenger}?sslmode=disable
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-messenger-media}
+      REDIS_URL: redis://redis:6379
+      REDIS_DISABLED: "false"
+      DB_ENCRYPTION_KEY: ${DB_ENCRYPTION_KEY:-}
+      VPN_XRAY_API_ADDR: xray:10085
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ../..
+      dockerfile: web/Dockerfile
+    ports:
+      - "3000:80"
+    environment:
+      VITE_API_PROXY_TARGET: http://server:8080
+    depends_on:
+      - server
+
+  xray:
+    build:
+      context: ../..
+      dockerfile: xray/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "10443:10443"
+      - "10444:10444"
+      - "10445:10445"
+      - "10085:10085"
+    volumes:
+      - ../../xray/config.json:/etc/xray/config.json:ro
+      - xray_certs:/etc/xray
+    networks:
+      - default
+
+volumes:
+  postgres_data:
+  minio_data:
+  redis_data:
+  server_data:
+  xray_certs:

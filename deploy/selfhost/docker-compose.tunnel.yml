@@ -1,0 +1,11 @@
+# Cloudflare Tunnel — доступ без открытия портов (за NAT)
+# Использование: docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d
+# URL в логах: docker compose logs -f cloudflared
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://web:80
+    depends_on:
+      - server

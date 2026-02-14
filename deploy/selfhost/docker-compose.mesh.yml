@@ -1,0 +1,19 @@
+# Mesh overlay — backup-receiver (coordinator только на main)
+# Peers подключаются к coordinator на main, здесь только приём бэкапов
+
+services:
+  backup-receiver:
+    build:
+      context: ../..
+      dockerfile: mesh/backup-receiver/Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      BACKUP_RECEIVER_ADDR: ":9100"
+      BACKUP_DIR: /data/backups
+      BACKUP_SECRET: ${MESH_BACKUP_SECRET:-}
+    volumes:
+      - backup_data:/data
+
+volumes:
+  backup_data:

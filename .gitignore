@@ -1,0 +1,56 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/bin/
+/dist/
+
+# Go
+/server/tmp/
+/server/vendor/
+*.test
+*.out
+coverage.txt
+
+# Node
+/node_modules/
+/web/node_modules/
+/web/.next/
+/web/out/
+/web/build/
+*.tsbuildinfo
+.pnpm-store/
+.yarn/
+
+# Env and secrets
+.env
+.env.local
+.env.*.local
+
+# Mesh mTLS (CA and client certs)
+deploy/main/mesh-ca/
+deploy/selfhost/federation/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Debug
+__debug_bin
+
+# Test and e2e
+/playwright-report/
+/test-results/
+/web/e2e/.cache/

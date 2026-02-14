@@ -1,0 +1,5 @@
+# Minimal — postgres context is small
+.git
+.gitignore
+.DS_Store
+*.md

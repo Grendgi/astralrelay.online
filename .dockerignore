@@ -1,0 +1,56 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation (not needed in images)
+*.md
+docs/
+
+# Env and secrets
+.env
+.env.*
+.env.local
+.env.*.local
+deploy/main/mesh-ca/
+deploy/selfhost/federation/
+
+# Install and deploy scripts
+install.sh
+install-selfhost.sh
+bootstrap.sh
+scripts/
+deploy/
+
+# Node
+node_modules/
+web/node_modules/
+web/.next/
+web/out/
+web/build/
+web/dist/
+*.tsbuildinfo
+.pnpm-store/
+.yarn/
+
+# Go
+server/tmp/
+server/vendor/
+*.test
+*.out
+coverage.txt
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and debug
+*.log
+logs/
+__debug_bin

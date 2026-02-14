@@ -1,0 +1,40 @@
+# Mesh overlay — coordinator, backup-receiver, WireGuard
+# Подключается к main и selfhost при MESH_ENABLED=true
+
+services:
+  coordinator:
+    build:
+      context: ../..
+      dockerfile: mesh/coordinator/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "9443:9443"
+    volumes:
+      - mesh_data:/data
+      - traefik_dynamic:/etc/traefik/dynamic
+      - ./mesh-ca:/etc/mesh-ca:ro
+    environment:
+      COORDINATOR_ADDR: ":9443"
+      COORDINATOR_STORAGE: /data/coordinator.json
+      COORDINATOR_ROUTES_DIR: /etc/traefik/dynamic
+      COORDINATOR_CA_CERT: ${COORDINATOR_CA_CERT:-/etc/mesh-ca/ca-cert.pem}
+      COORDINATOR_CA_KEY: ${COORDINATOR_CA_KEY:-/etc/mesh-ca/ca-key.pem}
+    networks:
+      - default
+
+  backup-receiver:
+    build:
+      context: ../..
+      dockerfile: mesh/backup-receiver/Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      BACKUP_RECEIVER_ADDR: ":9100"
+      BACKUP_DIR: /data/backups
+      BACKUP_SECRET: ${MESH_BACKUP_SECRET:-}
+    volumes:
+      - backup_data:/data
+
+volumes:
+  mesh_data:
+  backup_data:
