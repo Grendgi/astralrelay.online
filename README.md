@@ -1,31 +1,192 @@
-# Федеративный E2EE-мессенджер + VPN
+<p align="center">
+  <img src="https://img.shields.io/badge/AstralRelay-Federated%20E2EE%20%2B%20VPN-blue?style=for-the-badge" alt="AstralRelay" />
+</p>
 
-Чаты с end-to-end шифрованием, федерация, VPN (Xray). Децентрализованная сеть — главный сервер + self-host узлы.
+<h1 align="center">AstralRelay.online</h1>
+<p align="center">
+  <strong>Федеративный E2EE-мессенджер с интегрированным VPN</strong>
+</p>
+<p align="center">
+  Чаты с end-to-end шифрованием • Федерация как email • Xray (VLESS) для обхода блокировок
+</p>
 
-## Быстрый старт
+---
+
+## ✨ Возможности
+
+| Возможность | Описание |
+|-------------|----------|
+| 🔐 **E2EE** | End-to-end шифрование (X3DH + Double Ratchet) — сервер не видит содержимое сообщений |
+| 🌐 **Федерация** | Децентрализованная сеть: главный хаб + self-host узлы, обмен сообщениями между доменами |
+| 🔒 **VPN** | Xray (VLESS, VMess, Trojan) — пользователь скачивает конфиг в один клик |
+| 📱 **Push** | Web Push уведомления (VAPID) |
+| 🚀 **nip.io** | Домен по IP без покупки — `1.2.3.4.nip.io` → Let's Encrypt |
+| 🕸️ **Mesh** | WireGuard mesh между серверами, бэкапы БД на peer-узлы |
+
+---
+
+## 🚀 Быстрый старт
+
+### Вариант 1: Одна команда (zero config)
 
 ```bash
-git clone <repo> && cd Chat_VPN
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/Grendgi/astralrelay.online/main/bootstrap.sh | sudo sh
 ```
 
-Режим (main/selfhost), домен или IP. При вводе IP → `IP.nip.io`. Секреты генерируются автоматически.
+Docker, секреты, IP→nip.io, VAPID — всё автоматически. Без вопросов.
 
-## Инструкции
+---
 
-| Роль | Документ |
-|------|----------|
-| **Главный сервер (Hub)** | [docs/SETUP-MAIN.md](docs/SETUP-MAIN.md) |
-| **Self-host** (расширение сети) | [docs/SETUP-SELFHOST.md](docs/SETUP-SELFHOST.md) |
-| Dev | [docs/RUN-DEV.md](docs/RUN-DEV.md) |
+### Вариант 2: Только self-host (рекомендуется)
 
-## Структура
+Для своего инстанса — домен главного по умолчанию `astralrelay.online`:
+
+```bash
+git clone https://github.com/Grendgi/astralrelay.online.git
+cd astralrelay.online
+sudo ./install-selfhost.sh
+```
+
+---
+
+### Вариант 3: Main или self-host
+
+Универсальный скрипт — выбор режима (hub или свой инстанс):
+
+```bash
+git clone https://github.com/Grendgi/astralrelay.online.git
+cd astralrelay.online
+sudo ./install.sh
+```
+
+Интерактивно: домен/IP, email для Let's Encrypt, mesh. Секреты генерируются автоматически.
+
+---
+
+### Автоматический режим (CI / без TTY)
+
+```bash
+INSTALL_AUTO=1 INSTALL_MODE=selfhost sudo ./install.sh
+```
+
+---
+
+## 📐 Архитектура
 
 ```
-├── deploy/main/      # Hub: Traefik, server+server2
-├── deploy/selfhost/  # Self-host: nip.io или домен
-├── deploy/dev/       # Разработка
-├── install.sh
-├── server/, web/, xray/
-└── docs/
+                    [astralrelay.online] — главный хаб
+                               │
+               ┌───────────────┼───────────────┐
+               │               │               │
+          [Traefik]       [server 1]      [server 2]
+               │               │               │
+               └───────────────┼───────────────┘
+                               │
+                     [PostgreSQL] [Redis] [MinIO]
+                               │
+               ────────────────┼─────────────── федерация
+                               │
+    [self-host A]      [self-host B]      [self-host C]
+     nip.io/домен       nip.io/домен       subdomain*
 ```
+
+\* Subdomain главного (1-2-3-4.astralrelay.online) — в разработке
+
+---
+
+## 🛠 Технологии
+
+| Компонент | Стек |
+|-----------|------|
+| **Backend** | Go 1.23, Chi, JWT, PostgreSQL, Redis |
+| **Frontend** | React 18, TypeScript, Vite |
+| **E2EE** | X3DH, Double Ratchet, NaCl |
+| **VPN** | Xray-core (VLESS, VMess, Trojan) |
+| **Инфра** | Docker, Traefik, Let's Encrypt |
+
+---
+
+## 📚 Документация
+
+| Раздел | Описание |
+|--------|----------|
+| [Главный сервер (Hub)](docs/SETUP-MAIN.md) | Traefik, HA (server+server2), Let's Encrypt |
+| [Self-host](docs/SETUP-SELFHOST.md) | Свой инстанс, nip.io, Cloudflare Tunnel |
+| [VPN Mesh + бэкапы](docs/MESH-AND-BACKUP.md) | Coordinator, WireGuard mesh, pg_dump на peers |
+| [Subdomain главного](docs/SUBDOMAIN-MODE.md) | 1-2-3-4.astralrelay.online (в разработке) |
+| [Self-Hosting обзор](docs/SELF-HOSTING.md) | Роли, nip.io, HA, федерация |
+| [Dev-режим](docs/RUN-DEV.md) | Локальная разработка |
+| [Архитектура](docs/architecture.md) | Схема, компоненты, потоки |
+| [Полная документация](docs/README.md) | Протокол, API, глоссарий |
+
+---
+
+## 📁 Структура проекта
+
+```
+astralrelay.online/
+├── deploy/
+│   ├── main/           # Hub: Traefik, server+server2, HA
+│   ├── selfhost/       # Self-host: nip.io, домен, mesh
+│   └── dev/            # Разработка
+├── server/             # Go backend (API, федерация, VPN)
+├── web/                # React frontend
+├── xray/               # Xray VPN конфигурация
+├── mesh/               # Coordinator, backup-receiver (Go)
+├── scripts/            # setup-mesh, backup-to-peers, smoke-test, clean-rebuild
+├── install.sh          # Универсальная установка (main/selfhost)
+├── install-selfhost.sh # Только self-host
+└── docs/               # Документация
+```
+
+---
+
+## 🔧 Ручной запуск
+
+```bash
+# Подготовка сервера (Docker)
+sudo ./deploy/setup-server.sh
+
+# Main hub
+./deploy/main/run.sh
+
+# Self-host
+./deploy/selfhost/run.sh
+
+# Dev
+./deploy/dev/run.sh
+```
+
+---
+
+## 🧪 Проверка
+
+```bash
+./scripts/smoke-test.sh https://YOUR_DOMAIN
+```
+
+---
+
+## 📋 Требования
+
+| Роль | RAM | Диск | Порты |
+|------|-----|------|-------|
+| **Main** | 2 GB | 10 GB | 80, 443, 8082 |
+| **Self-host** | 1 GB | 5 GB | 80, 443 или 3000, 8080 |
+
+ОС: Linux (Ubuntu, Debian, Alpine, CentOS)
+
+---
+
+## 🤝 Участие в сети
+
+- **Главный хаб** — основной домен, точка входа для пользователей
+- **Self-host** — ваш инстанс расширяет федерацию, свои данные, свой контроль
+
+Подробнее: [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md)
+
+---
+
+<p align="center">
+  <sub>Децентрализованная сеть без единой точки отказа</sub>
+</p>
