@@ -175,8 +175,10 @@ services:
       VITE_API_PROXY_TARGET: http://server:8080
     depends_on:
       - server
+    restart: unless-stopped
     labels:
       - "traefik.enable=true"
+      - "traefik.docker.network=main_default"
       - "traefik.http.routers.web.rule=Host(`${SERVER_DOMAIN}`) && PathPrefix(`/`)"
       - "traefik.http.routers.web.entrypoints=web"
       - "traefik.http.routers.web.priority=1"

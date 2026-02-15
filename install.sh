@@ -369,6 +369,18 @@ if [ "$DOMAIN" != "localhost" ] && ! grep -q '^LETSENCRYPT_EMAIL=.' "$ENV_FILE" 
   update_env "LETSENCRYPT_EMAIL" "admin@$DOMAIN" "$ENV_FILE"
 fi
 
+# MAIN: сгенерировать traefik.yml из шаблона (подставить LETSENCRYPT_EMAIL)
+if [ "$MODE" = "main" ] && [ -f "$SCRIPT_DIR/deploy/main/traefik/traefik.yml.tpl" ]; then
+  le_email="$(get_env LETSENCRYPT_EMAIL "$ENV_FILE")"
+  [ -z "$le_email" ] && le_email="admin@$DOMAIN"
+  if command -v envsubst >/dev/null 2>&1; then
+    export LETSENCRYPT_EMAIL="$le_email"
+    envsubst < "$SCRIPT_DIR/deploy/main/traefik/traefik.yml.tpl" > "$SCRIPT_DIR/deploy/main/traefik/traefik.yml"
+  else
+    sed "s|\${LETSENCRYPT_EMAIL:-changeme@example.com}|$le_email|g" "$SCRIPT_DIR/deploy/main/traefik/traefik.yml.tpl" > "$SCRIPT_DIR/deploy/main/traefik/traefik.yml"
+  fi
+fi
+
 # selfhost federation hints
 if [ "$MODE" = "selfhost" ]; then
   update_env "FEDERATION_MODE" "main_only" "$ENV_FILE"
@@ -465,6 +477,7 @@ if [ "$MODE" = "main" ]; then
   say ""
   say "=== MAIN готов ==="
   say "URL: https://$DOMAIN"
+  say "Если 404/502: проверьте 'docker ps' (должны быть main-web-1, main-server-1) и 'docker logs main-server-1 main-web-1'."
   exit 0
 fi
 

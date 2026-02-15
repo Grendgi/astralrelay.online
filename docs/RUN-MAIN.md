@@ -29,6 +29,13 @@ cp deploy/main/.env.example deploy/main/.env
 2. DNS: A/AAAA запись на IP сервера.
 3. HTTPS: Let's Encrypt настраивается в Traefik через LETSENCRYPT_EMAIL (см. [SETUP-MAIN.md](SETUP-MAIN.md)).
 
+## Устранение 404/502
+
+- Убедитесь, что подняты **main-web-1** и **main-server-1**: `docker ps`.
+- Если **main-server-1** или **main-web-1** в состоянии Restarting/Exit: `docker logs main-server-1`, `docker logs main-web-1`.
+- Проверьте, что DNS для `SERVER_DOMAIN` указывает на IP сервера.
+- Перезапуск: из корня репозитория `docker compose -p main -f deploy/main/docker-compose.yml --env-file deploy/main/.env up -d --build`.
+
 ## Профиль ha (реплика PostgreSQL)
 
 ```bash
