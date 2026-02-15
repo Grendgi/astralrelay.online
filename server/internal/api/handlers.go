@@ -13,8 +13,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/messenger/server/internal/federation"
-	"github.com/messenger/server/internal/logjson"
 	"github.com/messenger/server/internal/keydir"
+	"github.com/messenger/server/internal/logjson"
 	"github.com/messenger/server/internal/push"
 	"github.com/messenger/server/internal/relay"
 	"github.com/messenger/server/internal/rooms"
@@ -35,14 +35,17 @@ type keysHandler struct {
 }
 
 type relayHandler struct {
-	relay  *relay.Service
-	rooms  *rooms.Service
-	fed    *federation.Client
-	domain string
-	hub    *stream.Hub
-	push   *push.Service
-	auth   AuthService
+	relay          *relay.Service
+	rooms          *rooms.Service
+	fed            *federation.Client
+	domain         string
+	hub            *stream.Hub
+	push           *push.Service
+	auth           AuthService
+	e2eeStrictOnly bool // reject non-Signal (MVP/plain) messages when true
 }
+
+const signalPrefix = "sig1:"
 
 func (h *keysHandler) getBundleForUser(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "userID")
@@ -161,6 +164,9 @@ func (h *keysHandler) updateKeys(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
 	}
+	if req.SignedPrekey != nil {
+		logjson.Log("audit", map[string]interface{}{"action": "signed_prekey_rotation", "user_id": userID, "device_id": deviceID.String()})
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{})
 }
 
@@ -242,9 +248,13 @@ func (h *keysHandler) listDevicesForUser(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
 	}
-	devices := make([]map[string]string, 0, len(deviceIDs))
+	devices := make([]map[string]interface{}, 0, len(deviceIDs))
 	for _, id := range deviceIDs {
-		devices = append(devices, map[string]string{"device_id": id})
+		d := map[string]interface{}{"device_id": id, "status": "active"}
+		if dev, err := uuid.Parse(id); err == nil {
+			d["signal_device_id"] = keydir.UUIDToSignalDeviceID(dev)
+		}
+		devices = append(devices, d)
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"devices": devices})
 }
@@ -270,6 +280,21 @@ func (h *relayHandler) send(w http.ResponseWriter, r *http.Request) {
 	ciphertext, _ := base64.StdEncoding.DecodeString(req.Content.Ciphertext)
 	idempotencyKey := r.Header.Get("X-Idempotency-Key")
 
+	// Capability pinning: when E2EE_STRICT_ONLY, reject non-Signal messages
+	if h.e2eeStrictOnly {
+		if len(req.Content.Ciphertexts) > 0 {
+			for _, ct := range req.Content.Ciphertexts {
+				if ct != "" && !strings.HasPrefix(ct, signalPrefix) {
+					writeError(w, http.StatusBadRequest, "strict_signal_only", "Server requires Signal Protocol only (no MVP/plain)")
+					return
+				}
+			}
+		} else if len(ciphertext) > 0 && !strings.HasPrefix(string(ciphertext), signalPrefix) {
+			writeError(w, http.StatusBadRequest, "strict_signal_only", "Server requires Signal Protocol only (no MVP/plain)")
+			return
+		}
+	}
+
 	in := relay.SendInput{
 		Sender:         req.Sender,
 		Recipient:      req.Recipient,
@@ -289,6 +314,10 @@ func (h *relayHandler) send(w http.ResponseWriter, r *http.Request) {
 	}
 	if err == relay.ErrRecipientNotFound {
 		writeError(w, http.StatusNotFound, "not_found", "Recipient not found")
+		return
+	}
+	if err == relay.ErrReplayTimestamp {
+		writeError(w, http.StatusBadRequest, "replay_protection", "Message timestamp outside acceptable window")
 		return
 	}
 	if err == relay.ErrRemoteRecipient && h.fed != nil {

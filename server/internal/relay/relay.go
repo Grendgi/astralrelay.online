@@ -16,7 +16,11 @@ import (
 	"github.com/messenger/server/internal/rooms"
 )
 
-const defaultTTLDays = 7
+const (
+	defaultTTLDays    = 7
+	replayWindowSec   = 300  // 5 min: reject messages older than this
+	futureToleranceSec = 60  // 1 min: reject messages too far in future
+)
 
 type RoomChecker interface {
 	IsMember(ctx context.Context, roomID uuid.UUID, userID int64) (bool, error)
@@ -62,6 +66,14 @@ type SendInput struct {
 func (s *Service) Send(ctx context.Context, in SendInput) (eventID string, err error) {
 	if in.EventID == "" {
 		in.EventID = "evt_" + uuid.New().String()
+	}
+	// Replay protection: reject timestamp outside acceptable window
+	now := time.Now().Unix()
+	if in.Timestamp < now-replayWindowSec {
+		return "", ErrReplayTimestamp
+	}
+	if in.Timestamp > now+futureToleranceSec {
+		return "", ErrReplayTimestamp
 	}
 	recipientDomain := extractDomain(in.Recipient)
 	if recipientDomain != "" && recipientDomain != s.domain {
@@ -156,6 +168,7 @@ var (
 	ErrRemoteRecipient   = fmt.Errorf("recipient is on remote server")
 	ErrNotRoomMember     = fmt.Errorf("sender is not a room member")
 	ErrRecipientNotFound = fmt.Errorf("recipient user not found")
+	ErrReplayTimestamp   = fmt.Errorf("message timestamp outside acceptable window (replay protection)")
 )
 
 type FederatedEvent struct {

@@ -696,6 +696,18 @@
   color: var(--text-muted);
 }
 
+.chat-fingerprint-qr {
+  margin: 12px 0;
+  display: flex;
+  justify-content: center;
+}
+
+.chat-fingerprint-qr img {
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+}
+
 .chat-fingerprint-pre {
   margin: 0;
   padding: 12px;
@@ -707,8 +719,14 @@
   white-space: pre-wrap;
 }
 
-.chat-fingerprint-close {
+.chat-fingerprint-actions {
+  display: flex;
+  gap: 8px;
   margin-top: 16px;
+}
+
+.chat-fingerprint-close {
+  margin-top: 0;
 }
 
 .chat-input-hidden {

@@ -97,7 +97,7 @@ export const api = {
     ),
 
   getRecipientDevices: (userID: string, token: string) =>
-    request<{ devices: Array<{ device_id: string }> }>(
+    request<{ devices: Array<{ device_id: string; signal_device_id?: number; status?: string }> }>(
       `/keys/devices/${encodeURIComponent(userID)}`,
       { token }
     ),
@@ -123,28 +123,59 @@ export const api = {
     throw new ApiError('Sync failed after retries', 503)
   },
 
-  uploadFile: (file: File | Blob, token: string) => {
+  uploadFile: async (file: File | Blob, token: string): Promise<{ content_uri: string }> => {
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/octet-stream',
       'X-Protocol-Version': '0.1',
     }
-    return fetch(`${API_BASE}/media/upload`, {
-      method: 'POST',
-      headers,
-      body: file,
-    }).then(async (res) => {
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new ApiError(data.message || res.statusText, res.status, data.error)
-      return data as { content_uri: string }
-    })
+    const doUpload = () =>
+      fetch(`${API_BASE}/media/upload`, {
+        method: 'POST',
+        headers,
+        body: file,
+      }).then(async (res) => {
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) throw new ApiError(data.message || res.statusText, res.status, data.error)
+        return data as { content_uri: string }
+      })
+    const maxAttempts = 3
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await doUpload()
+      } catch (e) {
+        const retryable = e instanceof ApiError
+          ? [408, 429, 500, 502, 503, 504].includes(e.status)
+          : e instanceof TypeError
+        if (!retryable || attempt === maxAttempts) throw e
+        await new Promise((r) => setTimeout(r, 1000 * attempt))
+      }
+    }
+    throw new ApiError('Upload failed', 0, 'upload_failed')
   },
 
-  downloadFile: (contentUri: string, token: string) =>
-    fetch(`${API_BASE}/media/${encodeURIComponent(contentUri)}`, {
-      headers: { 'Authorization': `Bearer ${token}` },
-      credentials: 'include',
-    }),
+  downloadFile: async (contentUri: string, token: string): Promise<Response> => {
+    const doFetch = () =>
+      fetch(`${API_BASE}/media/${encodeURIComponent(contentUri)}`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+        credentials: 'include',
+      })
+    const maxAttempts = 3
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const res = await doFetch()
+        if (res.ok) return res
+        const retryable = [408, 429, 500, 502, 503, 504].includes(res.status)
+        if (!retryable || attempt === maxAttempts) return res
+        try { await res.body?.cancel?.() } catch { /* consume body before retry */ }
+        await new Promise((r) => setTimeout(r, 1000 * attempt))
+      } catch (e) {
+        if (attempt === maxAttempts) throw e
+        await new Promise((r) => setTimeout(r, 1000 * attempt))
+      }
+    }
+    throw new ApiError('Download failed', 0, 'download_failed')
+  },
 
   vpnNodes: (token: string) =>
     request<{ nodes: Array<{ id: string; name: string; region: string; wireguard_endpoint: string; wireguard_server_pubkey: string; openvpn_endpoint: string; is_default: boolean; ping_url?: string }> }>('/vpn/nodes', { token }),

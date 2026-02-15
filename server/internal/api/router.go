@@ -40,6 +40,7 @@ func NewRouter(
 	fedRateLimit int,
 	fedMainOnlyDomain string,
 	fedAlertWebhook string,
+	e2eeStrictOnly bool,
 ) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -49,7 +50,7 @@ func NewRouter(
 
 	authH := &authHandler{auth: authSvc}
 	keysH := &keysHandler{keydir: keydirSvc, fed: fedClient}
-	relayH := &relayHandler{relay: relaySvc, rooms: roomsSvc, fed: fedClient, domain: domain, hub: streamHub, push: pushSvc, auth: authSvc}
+	relayH := &relayHandler{relay: relaySvc, rooms: roomsSvc, fed: fedClient, domain: domain, hub: streamHub, push: pushSvc, auth: authSvc, e2eeStrictOnly: e2eeStrictOnly}
 	roomsH := &roomsHandler{rooms: roomsSvc}
 	mediaH := &mediaHandler{media: mediaSvc}
 	maxBody := 1048576
@@ -103,11 +104,11 @@ func NewRouter(
 			r.Post("/auth/logout", authH.logout)
 			r.Get("/auth/devices", authH.listDevices)
 			r.Post("/auth/devices/{deviceID}/revoke", authH.revokeDevice)
-			r.Get("/auth/keys/status", keysH.keysStatus)
-			r.Put("/auth/keys", keysH.updateKeys)
-			r.Get("/keys/bundle/{userID}", keysH.getBundleForUser)
-			r.Get("/keys/bundle/{userID}/{deviceID}", keysH.getBundle)
-			r.Get("/keys/devices/{userID}", keysH.listDevicesForUser)
+			r.With(LimitByUser(60, time.Minute)).Get("/auth/keys/status", keysH.keysStatus)
+			r.With(LimitByUser(20, time.Minute)).Put("/auth/keys", keysH.updateKeys)
+			r.With(LimitByUser(120, time.Minute)).Get("/keys/bundle/{userID}", keysH.getBundleForUser)
+			r.With(LimitByUser(120, time.Minute)).Get("/keys/bundle/{userID}/{deviceID}", keysH.getBundle)
+			r.With(LimitByUser(60, time.Minute)).Get("/keys/devices/{userID}", keysH.listDevicesForUser)
 			r.With(LimitByUser(60, time.Minute)).Post("/messages/send", relayH.send)
 			r.Post("/messages/typing", relayH.typing)
 			r.Post("/messages/read", relayH.read)
@@ -127,9 +128,9 @@ func NewRouter(
 			r.Get("/vpn/my-configs", vpnH.myConfigs)
 			r.Post("/vpn/revoke", vpnH.revoke)
 			r.Get("/vpn/config/{protocol}", vpnH.getConfig)
-			r.Post("/backup/prepare", backupH.prepare)
-			r.Get("/backup/salt", backupH.getSalt)
-			r.Post("/keys/sync", backupH.syncKeys)
+			r.With(LimitByUser(10, time.Minute)).Post("/backup/prepare", backupH.prepare)
+			r.With(LimitByUser(30, time.Minute)).Get("/backup/salt", backupH.getSalt)
+			r.With(LimitByUser(10, time.Minute)).Post("/keys/sync", backupH.syncKeys)
 			r.Get("/push/vapid-public", pushH.vapidPublic)
 			r.Post("/push/subscribe", pushH.subscribe)
 			r.Post("/push/unsubscribe", pushH.unsubscribe)

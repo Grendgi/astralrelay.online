@@ -54,9 +54,10 @@ type OpenVPNVPNConfig struct {
 }
 
 type ServerConfig struct {
-	Domain string
-	Port   int
-	Debug  bool
+	Domain        string
+	Port          int
+	Debug         bool
+	E2EEStrictOnly bool // if true, reject non-Signal (MVP/plain) messages
 }
 
 type DatabaseConfig struct {
@@ -114,11 +115,13 @@ func Load() (*Config, error) {
 	redisURL := getEnv("REDIS_URL", "redis://localhost:6379")
 	redisDisabled, _ := strconv.ParseBool(getEnv("REDIS_DISABLED", "true"))
 
+	e2eeStrictOnly, _ := strconv.ParseBool(getEnv("E2EE_STRICT_ONLY", "false"))
 	cfg := &Config{
 		Server: ServerConfig{
-			Domain: domain,
-			Port:   port,
-			Debug:  debug,
+			Domain:        domain,
+			Port:          port,
+			Debug:         debug,
+			E2EEStrictOnly: e2eeStrictOnly,
 		},
 		Database: DatabaseConfig{
 			URL:               dbURL,

@@ -12,6 +12,7 @@ import (
 	"github.com/messenger/server/internal/db"
 	"github.com/messenger/server/internal/dbenc"
 	"github.com/messenger/server/internal/keydir"
+	"github.com/messenger/server/internal/logjson"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -134,6 +135,7 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (userID string
 	if err := tx.Commit(ctx); err != nil {
 		return "", uuid.Nil, "", err
 	}
+	logjson.Log("audit", map[string]interface{}{"action": "device_create", "user_id": uid, "device_id": in.DeviceID.String(), "event": "register"})
 
 	if len(in.KeysBackupSalt) > 0 && len(in.KeysBackupBlob) > 0 {
 		_ = s.StoreKeyBackup(ctx, uid, in.KeysBackupSalt, in.KeysBackupBlob)
@@ -319,6 +321,7 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*LoginResult, error
 		if err != nil {
 			return nil, fmt.Errorf("add device: %w", err)
 		}
+		logjson.Log("audit", map[string]interface{}{"action": "device_create", "user_id": uid, "device_id": in.DeviceID.String(), "event": "login_new_device"})
 		if len(in.OneTimePrekeys) > keydir.MaxOneTimePrekeysPerDevice {
 			return nil, fmt.Errorf("one-time prekeys: max %d per device", keydir.MaxOneTimePrekeysPerDevice)
 		}

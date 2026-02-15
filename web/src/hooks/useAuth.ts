@@ -1,5 +1,8 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { api } from '../api/client'
+
+/** Autolock: inactivity timeout in ms. 0 = disabled. */
+const AUTO_LOCK_MS = 15 * 60 * 1000
 import { generateKeys, generateSignedPrekey } from '../crypto/keys'
 import { createBackup } from '../crypto/backup'
 import { getKeysFromStorage, setKeysInStorage, clearKeysFromStorage, migrateKeysFromLocalStorage, mergeOtpksToStorage, updateSignedPrekeyInStorage, isKeysEncrypted, unlockKeysWithPassphrase, setKeysWithPassphrase } from '../crypto/key-storage'
@@ -48,6 +51,8 @@ export function useAuth() {
   )
   const [keys, setKeys] = useState<StoredKeys | null>(null)
   const [keysLocked, setKeysLocked] = useState(false)
+  const passphraseForAutolockRef = useRef<string | null>(null)
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (!user) {
@@ -78,8 +83,13 @@ export function useAuth() {
         {
           identityKey: keys.identityKey,
           identitySecret: keys.identitySecret,
-          signedPrekey: keys.signedPrekey,
-          oneTimePrekeys: keys.oneTimePrekeys.map((o) => o.pub),
+          identitySigningKey: keys.identitySigningKey,
+          ...('identitySigningSecret' in keys && { identitySigningSecret: (keys as { identitySigningSecret?: string }).identitySigningSecret }),
+          signedPrekey: { ...keys.signedPrekey, created_at: Date.now() },
+          oneTimePrekeys: keys.oneTimePrekeys,
+          device_id: deviceId,
+          trustedKeys: {},
+          schemaVersion: 2,
         },
         password,
         saltB64
@@ -161,16 +171,25 @@ export function useAuth() {
       } else if (res.keys_backup && needKeysRestore) {
         try {
           const { restoreBackup } = await import('../crypto/backup')
+          const { restoreTrustedKeysFromBackup } = await import('../crypto/trusted-keys-storage')
           const restored = await restoreBackup(res.keys_backup.blob, password, res.keys_backup.salt)
+          const otpk = Array.isArray(restored.oneTimePrekeys) && restored.oneTimePrekeys.length > 0
+            ? restored.oneTimePrekeys.filter((o: unknown): o is { key_id: number; pub: string; priv: string } =>
+                o && typeof o === 'object' && 'key_id' in (o as object) && 'pub' in (o as object) && 'priv' in (o as object)
+              )
+            : []
           const stored: StoredKeys = {
             identityKey: restored.identityKey,
             identitySecret: restored.identitySecret,
             identitySigningKey: restored.identitySigningKey,
             ...(restored.identitySigningSecret && { identitySigningSecret: restored.identitySigningSecret }),
             signedPrekey: restored.signedPrekey,
-            oneTimePrekeys: [],
+            oneTimePrekeys: otpk,
           }
           await setKeysInStorage(stored)
+          if (restored.trustedKeys && Object.keys(restored.trustedKeys).length > 0) {
+            await restoreTrustedKeysFromBackup(restored.trustedKeys)
+          }
           window.location.reload()
           return
         } catch {
@@ -192,17 +211,50 @@ export function useAuth() {
 
   const unlockKeys = useCallback(async (passphrase: string) => {
     const k = await unlockKeysWithPassphrase(passphrase)
+    passphraseForAutolockRef.current = passphrase
     setKeys(k)
     setKeysLocked(false)
   }, [])
 
   const lockKeysWithPassphrase = useCallback(async (passphrase: string) => {
+    passphraseForAutolockRef.current = null
     const k = await getKeysFromStorage()
     if (!k) return
     await setKeysWithPassphrase(k, passphrase)
     setKeys(null)
     setKeysLocked(true)
   }, [])
+
+  // Autolock: inactivity timeout → lock E2EE with stored passphrase
+  useEffect(() => {
+    if (!user || !keys || AUTO_LOCK_MS <= 0) return
+    const doLock = async () => {
+      const p = passphraseForAutolockRef.current
+      if (!p) return
+      passphraseForAutolockRef.current = null
+      try {
+        const k = await getKeysFromStorage()
+        if (k) {
+          await setKeysWithPassphrase(k, p)
+          setKeys(null)
+          setKeysLocked(true)
+        }
+      } catch {
+        // ignore
+      }
+    }
+    const resetTimer = () => {
+      if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current)
+      inactivityTimerRef.current = setTimeout(doLock, AUTO_LOCK_MS)
+    }
+    resetTimer()
+    const events = ['mousedown', 'keydown', 'scroll', 'touchstart']
+    events.forEach((ev) => window.addEventListener(ev, resetTimer))
+    return () => {
+      if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current)
+      events.forEach((ev) => window.removeEventListener(ev, resetTimer))
+    }
+  }, [user, keys])
 
   const addOtpks = useCallback(async (entries: OneTimePrekeyEntry[]) => {
     await mergeOtpksToStorage(entries)
@@ -220,6 +272,11 @@ export function useAuth() {
   )
 
   const logout = useCallback(() => {
+    passphraseForAutolockRef.current = null
+    if (inactivityTimerRef.current) {
+      clearTimeout(inactivityTimerRef.current)
+      inactivityTimerRef.current = null
+    }
     const t = token
     if (t) {
       api.logout(t).catch(() => {}) // fire-and-forget: revoke on server

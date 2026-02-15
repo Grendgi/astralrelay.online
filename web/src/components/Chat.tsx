@@ -44,6 +44,8 @@ function FilePreview({
   lazy = true,
   fileKey,
   nonce,
+  fileSha256,
+  chunkSize,
 }: {
   contentUri: string
   filename: string
@@ -53,6 +55,8 @@ function FilePreview({
   lazy?: boolean
   fileKey?: string
   nonce?: string
+  fileSha256?: string
+  chunkSize?: number
 }) {
   const [url, setUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -99,10 +103,10 @@ function FilePreview({
           throw new Error('Received error page instead of file')
         }
         let blob: Blob = await res.blob()
-        if (fileKey && nonce) {
+        if (fileKey && (nonce || chunkSize)) {
           const ciphertext = new Uint8Array(await blob.arrayBuffer())
-          const plain = decryptAttachment(ciphertext, fileKey, nonce)
-          blob = new Blob([plain])
+          const plain = await decryptAttachment(ciphertext, fileKey, nonce ?? '', fileSha256, chunkSize)
+          blob = new Blob([plain as BlobPart])
         }
         // Браузеру нужен корректный MIME для отображения img/video (octet-stream может не рендериться)
         const ext = filename.split('.').pop()?.toLowerCase()
@@ -132,7 +136,7 @@ function FilePreview({
         return null
       })
     }
-  }, [contentUri, token, canPreview, filename, lazy, inView, fileKey, nonce])
+  }, [contentUri, token, canPreview, filename, lazy, inView, fileKey, nonce, fileSha256, chunkSize])
 
   const sizeStr = size != null ? formatFileSize(size) : null
 
@@ -244,11 +248,12 @@ function FilePreview({
 
   return wrap(null)
 }
-import { encrypt, decrypt, isE2EEPayload, encryptAttachment, decryptAttachment } from '../crypto/e2ee'
+import { encrypt, decrypt, isE2EEPayload, encryptAttachment, decryptAttachment, E2EE_ATTACHMENT_VERSION } from '../crypto/e2ee'
 import { computeSafetyNumber } from '../crypto/fingerprint'
+import { safetyNumberToQRDataUrl } from '../crypto/fingerprint-qr'
 import { signalEncrypt, signalDecrypt, isSignalCiphertext, uuidToSignalDeviceId } from '../crypto/signal'
 import { getE2EEMode, setE2EEMode, type E2EEMode } from '../crypto/e2ee-mode'
-import { getStoredIdentityKey, setStoredIdentityKey, checkIdentityKeyChange } from '../crypto/trusted-keys'
+import { getStoredIdentityKey, setStoredIdentityKey, checkIdentityKeyChange, markVerified, getTrustedKeysForBackup, restoreTrustedKeysFromBackup, getTrustState } from '../crypto/trusted-keys'
 import { createBackup, restoreBackup } from '../crypto/backup'
 import { logError } from '../utils/safe-log'
 import { sanitizeForDisplay } from '../utils/sanitize'
@@ -347,7 +352,9 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
   const [pushLoading, setPushLoading] = useState(false)
   const [decryptedSignal, setDecryptedSignal] = useState<Record<string, string>>({})
   const [fingerprintModal, setFingerprintModal] = useState<{ recipient: string; safetyNumber: string } | null>(null)
+  const [fingerprintQrUrl, setFingerprintQrUrl] = useState<string | null>(null)
   const [fingerprintLoading, setFingerprintLoading] = useState(false)
+  const [fingerprintCopied, setFingerprintCopied] = useState(false)
   const [e2eeMode, setE2eeModeState] = useState<E2EEMode>(() => getE2EEMode())
   const setE2eeMode = (m: E2EEMode) => {
     setE2eeModeState(m)
@@ -378,6 +385,18 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFingerprintModal(null) }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
+  }, [fingerprintModal])
+
+  useEffect(() => {
+    if (!fingerprintModal || fingerprintModal.safetyNumber.includes('—')) {
+      setFingerprintQrUrl(null)
+      return
+    }
+    let cancelled = false
+    safetyNumberToQRDataUrl(fingerprintModal.safetyNumber)
+      .then((url) => { if (!cancelled) setFingerprintQrUrl(url) })
+      .catch(() => { if (!cancelled) setFingerprintQrUrl(null) })
+    return () => { cancelled = true }
   }, [fingerprintModal])
 
   const trustNewKey = useCallback(async () => {
@@ -493,6 +512,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
     let cancelled = false
     api.getKeysStatus(token)
       .then(async (st) => {
+        if (cancelled) return
         const updates: Parameters<typeof api.updateKeys>[0] = {}
         let newPrekeys: import('../crypto/keys').OneTimePrekeyEntry[] = []
         if (st.unconsumed_prekeys < REPLENISH_THRESHOLD) {
@@ -841,13 +861,17 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
     setBackupError(null)
     try {
       const { salt } = await api.backupPrepare(token)
+      const trustedKeys = await getTrustedKeysForBackup()
       const payload = {
         identityKey: keys.identityKey,
         identitySecret: keys.identitySecret,
         ...(keys.identitySigningKey && { identitySigningKey: keys.identitySigningKey }),
         ...(keys.identitySigningSecret && { identitySigningSecret: keys.identitySigningSecret }),
-        signedPrekey: keys.signedPrekey,
-        oneTimePrekeys: keys.oneTimePrekeys.map((o) => o.pub),
+        signedPrekey: { ...keys.signedPrekey, created_at: Date.now() },
+        oneTimePrekeys: keys.oneTimePrekeys,
+        device_id: user.device_id,
+        trustedKeys,
+        schemaVersion: 2,
       }
       const blobB64 = await createBackup(payload, password, salt)
       await api.keysSync(token, { salt, blob: blobB64 })
@@ -885,14 +909,22 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
       const blobB64 = btoa(bin)
       const { salt } = await api.backupGetSalt(token)
       const payload = await restoreBackup(blobB64, password, salt)
+      const otpk = Array.isArray(payload.oneTimePrekeys) && payload.oneTimePrekeys.length > 0
+        ? payload.oneTimePrekeys.filter((o): o is { key_id: number; pub: string; priv: string } =>
+            Boolean(o && typeof o === 'object' && 'key_id' in o && 'pub' in o && 'priv' in o)
+          )
+        : []
       await setKeysInStorage({
         identityKey: payload.identityKey,
         identitySecret: payload.identitySecret,
         identitySigningKey: payload.identitySigningKey,
         ...(payload.identitySigningSecret && { identitySigningSecret: payload.identitySigningSecret }),
         signedPrekey: payload.signedPrekey,
-        oneTimePrekeys: [],
+        oneTimePrekeys: otpk,
       })
+      if (payload.trustedKeys && Object.keys(payload.trustedKeys).length > 0) {
+        await restoreTrustedKeysFromBackup(payload.trustedKeys)
+      }
       window.location.reload()
     } catch (err) {
       setBackupError(err instanceof Error ? err.message : 'Ошибка восстановления')
@@ -992,20 +1024,31 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
       setSendHintError(true)
       return
     }
+    if (keys && !isRoomAddr(r) && e2eeMode === 'strict') {
+      const trust = await getTrustState(r)
+      if (trust?.status === 'unverified') {
+        setSendHint('Strict: подтвердите Safety Number перед отправкой')
+        setSendHintError(true)
+        return
+      }
+    }
     setSendHint(null)
     setSendHintError(false)
     try {
       const fileBytes = new Uint8Array(await file.arrayBuffer())
-      const { ciphertext, fileKey, nonce } = await encryptAttachment(fileBytes)
-      const cipherBlob = new Blob([ciphertext])
+      const { ciphertext, fileKey, nonce, sha256, chunkSize } = await encryptAttachment(fileBytes)
+      const cipherBlob = new Blob([ciphertext as BlobPart])
       const { content_uri } = await api.uploadFile(cipherBlob, token)
       const payload = JSON.stringify({
         message_type: 'file',
+        e2ee_version: E2EE_ATTACHMENT_VERSION,
         content_uri,
         filename: file.name,
         size: file.size,
         file_key: fileKey,
         nonce,
+        file_sha256: sha256,
+        ...(chunkSize != null && { chunk_size: chunkSize }),
       })
       const isRoom = isRoomAddr(r)
       let content: { ciphertext?: string; ciphertexts?: Record<string, string>; session_id: string }
@@ -1084,6 +1127,14 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
       setSendHintError(true)
       return
     }
+    if (keys && !isRoomAddr(r) && e2eeMode === 'strict') {
+      const trust = await getTrustState(r)
+      if (trust?.status === 'unverified') {
+        setSendHint('Strict: подтвердите Safety Number перед отправкой')
+        setSendHintError(true)
+        return
+      }
+    }
     setSendHint(null)
     setSendHintError(false)
     setSending(true)
@@ -1152,7 +1203,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
 
   type ParsedMessage =
     | { type: 'text'; text: string }
-    | { type: 'file'; filename: string; content_uri: string; size?: number; file_key?: string; nonce?: string }
+    | { type: 'file'; filename: string; content_uri: string; size?: number; file_key?: string; nonce?: string; file_sha256?: string; chunk_size?: number; e2ee_version?: number }
 
   const parseMessage = (ciphertext: string, eventId?: string): ParsedMessage => {
     if (!ciphertext) return { type: 'text', text: '[encrypted]' }
@@ -1195,6 +1246,9 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
           size: parsed.size,
           file_key: parsed.file_key,
           nonce: parsed.nonce,
+          file_sha256: parsed.file_sha256,
+          chunk_size: parsed.chunk_size,
+          e2ee_version: parsed.e2ee_version,
         }
       }
     } catch {
@@ -1244,14 +1298,14 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
     }
   }, [token])
 
-  const downloadFileMessage = async (contentUri: string, filename: string, fileKey?: string, nonce?: string) => {
+  const downloadFileMessage = async (contentUri: string, filename: string, fileKey?: string, nonce?: string, fileSha256?: string, chunkSize?: number) => {
     try {
       const res = await api.downloadFile(contentUri, token)
       let blob: Blob = await res.blob()
-      if (fileKey && nonce) {
+      if (fileKey && (nonce || chunkSize)) {
         const ciphertext = new Uint8Array(await blob.arrayBuffer())
-        const plain = decryptAttachment(ciphertext, fileKey, nonce)
-        blob = new Blob([new Uint8Array(plain)])
+        const plain = await decryptAttachment(ciphertext, fileKey, nonce ?? '', fileSha256, chunkSize)
+        blob = new Blob([plain as BlobPart])
       }
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -1939,9 +1993,11 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
                         filename={parsed.filename}
                         size={parsed.size}
                         token={token}
-                        onDownload={() => downloadFileMessage(parsed.content_uri, parsed.filename, parsed.file_key, parsed.nonce)}
+                        onDownload={() => downloadFileMessage(parsed.content_uri, parsed.filename, parsed.file_key, parsed.nonce, parsed.file_sha256, parsed.chunk_size)}
                         fileKey={parsed.file_key}
                         nonce={parsed.nonce}
+                        fileSha256={parsed.file_sha256}
+                        chunkSize={parsed.chunk_size}
                       />
                     ) : (
                       <span className="chat-msg-text">{displayText}</span>
@@ -2010,7 +2066,16 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
         </>
         )}
       {fingerprintModal && (() => {
-        const close = () => setFingerprintModal(null)
+        const close = () => { setFingerprintModal(null); setFingerprintCopied(false); setFingerprintQrUrl(null) }
+        const handleCopy = async () => {
+          try {
+            await navigator.clipboard.writeText(fingerprintModal.safetyNumber)
+            setFingerprintCopied(true)
+            setTimeout(() => setFingerprintCopied(false), 2000)
+          } catch {
+            // clipboard API denied
+          }
+        }
         return (
         <div
           role="dialog"
@@ -2027,16 +2092,41 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
             <p className="chat-fingerprint-desc">
               Сравните с {fingerprintModal.recipient} лично. Если совпадает — канал защищён от MITM.
             </p>
+            {fingerprintQrUrl && (
+              <div className="chat-fingerprint-qr" aria-hidden="true">
+                <img src={fingerprintQrUrl} alt="" width={180} height={180} />
+              </div>
+            )}
             <pre className="chat-fingerprint-pre">
               {fingerprintModal.safetyNumber}
             </pre>
-            <button
-              type="button"
-              onClick={close}
-              className="chat-vpn-btn chat-fingerprint-close"
-            >
-              Закрыть
-            </button>
+            <div className="chat-fingerprint-actions">
+              <button
+                type="button"
+                onClick={handleCopy}
+                className="chat-vpn-btn"
+                title="Скопировать в буфер"
+              >
+                {fingerprintCopied ? 'Скопировано' : 'Копировать'}
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  await markVerified(fingerprintModal.recipient, 'manual')
+                  close()
+                }}
+                className="chat-vpn-btn"
+              >
+                Подтвердить
+              </button>
+              <button
+                type="button"
+                onClick={close}
+                className="chat-vpn-btn chat-fingerprint-close"
+              >
+                Закрыть
+              </button>
+            </div>
           </div>
         </div>
         )

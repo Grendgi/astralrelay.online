@@ -8,7 +8,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx",
-    "format": "prettier --write 'src/**/*.{ts,tsx,css,json}'"
+    "format": "prettier --write 'src/**/*.{ts,tsx,css,json}'",
+    "audit": "npm audit --audit-level=high",
+    "audit:fix": "npm audit fix"
   },
   "engines": {
     "node": ">=12.18.0"
@@ -17,6 +19,7 @@
     "@privacyresearch/libsignal-protocol-typescript": "^0.0.16",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "qrcode": "^1.5.4",
     "tweetnacl": "^1.0.3",
     "tweetnacl-util": "^0.15.1"
   },

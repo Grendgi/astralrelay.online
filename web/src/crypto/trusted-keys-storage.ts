@@ -1,13 +1,37 @@
 /**
  * Trusted identity keys storage in IndexedDB (not localStorage).
- * Persists per-contact identity_key for key-change detection.
+ * Persists per-contact identity_key and trust state: seen, verified, changed.
+ *
+ * Trust states:
+ * - seen: first contact (TOFU) or accepted new key after change
+ * - verified: user confirmed safety number (manual or QR)
+ * - changed: key differs from stored (computed at runtime)
  */
 const DB_NAME = 'messenger-trusted-keys'
-const DB_VERSION = 1
+const DB_VERSION = 2
 const STORE_NAME = 'data'
 const KEY_NAME = 'identity_keys'
 
 const LEGACY_STORAGE_KEY = 'e2ee_identity_keys'
+
+export type TrustStatus = 'verified' | 'unverified' | 'changed'
+export type VerifiedMethod = 'manual' | 'qr'
+
+export interface TrustEntry {
+  identityKey: string
+  verifiedAt?: number
+  verifiedMethod?: VerifiedMethod
+}
+
+export interface TrustState {
+  status: TrustStatus
+  identityKey: string
+  previousKey?: string
+  verifiedAt?: number
+  verifiedMethod?: VerifiedMethod
+}
+
+type StoredMap = Record<string, TrustEntry | string>
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -23,10 +47,18 @@ function openDB(): Promise<IDBDatabase> {
   })
 }
 
-async function getMap(): Promise<Record<string, string>> {
+function toTrustEntry(v: TrustEntry | string): TrustEntry {
+  if (typeof v === 'string') return { identityKey: v }
+  if (v && typeof v === 'object' && typeof (v as TrustEntry).identityKey === 'string') {
+    return v as TrustEntry
+  }
+  return { identityKey: String(v) }
+}
+
+async function getMap(): Promise<StoredMap> {
   try {
     const db = await openDB()
-    const raw = await new Promise<Record<string, string> | undefined>((resolve, reject) => {
+    const raw = await new Promise<StoredMap | undefined>((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, 'readonly')
       const req = tx.objectStore(STORE_NAME).get(KEY_NAME)
       req.onerror = () => reject(req.error)
@@ -39,7 +71,7 @@ async function getMap(): Promise<Record<string, string>> {
   }
 }
 
-async function setMap(map: Record<string, string>): Promise<void> {
+async function setMap(map: StoredMap): Promise<void> {
   const db = await openDB()
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite')
@@ -50,34 +82,109 @@ async function setMap(map: Record<string, string>): Promise<void> {
   db.close()
 }
 
-/** Migrate from localStorage to IndexedDB. */
-async function migrateFromLocalStorage(): Promise<Record<string, string>> {
+/** Migrate from localStorage (legacy {recipient: identityKey} string values). */
+async function migrateFromLocalStorage(): Promise<StoredMap> {
   try {
     const raw = localStorage.getItem(LEGACY_STORAGE_KEY)
     if (!raw) return {}
     const parsed = JSON.parse(raw)
     const map = typeof parsed === 'object' && parsed !== null ? parsed : {}
     if (Object.keys(map).length > 0) {
-      await setMap(map)
+      const migrated: StoredMap = {}
+      for (const [k, v] of Object.entries(map)) {
+        if (typeof v === 'string') migrated[k] = { identityKey: v }
+        else migrated[k] = toTrustEntry(v as TrustEntry)
+      }
+      await setMap(migrated)
       localStorage.removeItem(LEGACY_STORAGE_KEY)
     }
-    return map
+    return map as StoredMap
   } catch {
     return {}
   }
 }
 
+/** Ensure stored format is TrustEntry (migrate legacy string values). */
+async function ensureTrustEntryFormat(): Promise<void> {
+  const map = await getMap()
+  let changed = false
+  for (const [k, v] of Object.entries(map)) {
+    if (typeof v === 'string') {
+      ;(map as Record<string, TrustEntry>)[k] = { identityKey: v }
+      changed = true
+    }
+  }
+  if (changed) await setMap(map)
+}
+
 /** Get stored identity_key for a contact. */
 export async function getStoredIdentityKey(recipient: string): Promise<string | null> {
   const map = await getMap()
-  return map[recipient] ?? null
+  const entry = map[recipient]
+  if (!entry) return null
+  return toTrustEntry(entry).identityKey
 }
 
-/** Store identity_key for a contact (after verification or first contact). */
+/** Store identity_key for a contact (TOFU or after accepting changed key). Clears verified. */
 export async function setStoredIdentityKey(recipient: string, identityKey: string): Promise<void> {
   const map = await getMap()
-  map[recipient] = identityKey
+  const prev = map[recipient]
+  const prevEntry = prev ? toTrustEntry(prev) : null
+  // When key changes, clear verified. When same key, preserve verified.
+  const entry: TrustEntry = prevEntry?.identityKey === identityKey
+    ? { ...prevEntry, identityKey }
+    : { identityKey }
+  map[recipient] = entry
   await setMap(map)
+}
+
+/** Mark contact as verified (safety number confirmed). */
+export async function markVerified(recipient: string, method: VerifiedMethod = 'manual'): Promise<void> {
+  const map = await getMap()
+  const raw = map[recipient]
+  const entry = raw ? toTrustEntry(raw) : null
+  if (!entry) return
+  map[recipient] = {
+    ...entry,
+    verifiedAt: Date.now(),
+    verifiedMethod: method,
+  }
+  await setMap(map)
+}
+
+/**
+ * Get trust state for a contact.
+ * Pass currentIdentityKey (from server) to detect 'changed'.
+ */
+export async function getTrustState(
+  recipient: string,
+  currentIdentityKey?: string
+): Promise<TrustState | null> {
+  await ensureTrustEntryFormat()
+  const map = await getMap()
+  const raw = map[recipient]
+  if (!raw) return null
+  const entry = toTrustEntry(raw)
+  const stored = entry.identityKey
+
+  if (currentIdentityKey != null) {
+    if (stored !== currentIdentityKey) {
+      return {
+        status: 'changed',
+        identityKey: currentIdentityKey,
+        previousKey: stored,
+        verifiedAt: entry.verifiedAt,
+        verifiedMethod: entry.verifiedMethod,
+      }
+    }
+  }
+
+  return {
+    status: entry.verifiedAt ? 'verified' : 'unverified',
+    identityKey: stored,
+    verifiedAt: entry.verifiedAt,
+    verifiedMethod: entry.verifiedMethod,
+  }
 }
 
 /**
@@ -94,7 +201,31 @@ export async function checkIdentityKeyChange(
   return { changed: true, previousKey: stored }
 }
 
+/** Export trusted keys map for backup. */
+export async function getTrustedKeysForBackup(): Promise<Record<string, TrustEntry>> {
+  await ensureTrustEntryFormat()
+  const map = await getMap()
+  const out: Record<string, TrustEntry> = {}
+  for (const [k, v] of Object.entries(map)) {
+    if (v) out[k] = toTrustEntry(v)
+  }
+  return out
+}
+
+/** Restore trusted keys from backup. Merges with existing (backup overwrites). */
+export async function restoreTrustedKeysFromBackup(data: Record<string, TrustEntry>): Promise<void> {
+  if (!data || typeof data !== 'object') return
+  const map = await getMap()
+  for (const [k, v] of Object.entries(data)) {
+    if (v && typeof v === 'object' && typeof (v as TrustEntry).identityKey === 'string') {
+      map[k] = v as TrustEntry
+    }
+  }
+  await setMap(map)
+}
+
 /** Ensure migration has run and return current map. Used at init. */
 export async function initTrustedKeysStorage(): Promise<void> {
   await migrateFromLocalStorage()
+  await ensureTrustEntryFormat()
 }

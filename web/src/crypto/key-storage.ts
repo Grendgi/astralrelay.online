@@ -1,6 +1,6 @@
 /**
  * E2EE keys storage in IndexedDB (not localStorage) to reduce XSS impact.
- * Optional passphrase wrapping: keys can be stored encrypted with PBKDF2+NaCl.
+ * Passphrase wrapping: v2 = PBKDF2+NaCl; v3 = PBKDF2+AES-GCM with non-extractable wrapping key.
  */
 import * as nacl from 'tweetnacl'
 import { decodeBase64, encodeBase64, decodeUTF8, encodeUTF8 } from 'tweetnacl-util'
@@ -12,10 +12,12 @@ const STORE_NAME = 'keys'
 const KEY_NAME = 'e2ee_keys'
 
 const PBKDF2_ITERATIONS = 100_000
-const NONCE_LENGTH = nacl.secretbox.nonceLength
+const NACL_NONCE_LENGTH = nacl.secretbox.nonceLength
 const ENCRYPTED_VERSION = 2
+const ENCRYPTED_VERSION_V3 = 3 // AES-GCM + non-extractable wrapping key
+const AES_GCM_IV_LENGTH = 12
 
-async function deriveKey(password: string, salt: Uint8Array): Promise<Uint8Array> {
+async function deriveKeyRaw(password: string, salt: Uint8Array): Promise<Uint8Array> {
   const enc = new TextEncoder()
   const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits'])
   const bits = await crypto.subtle.deriveBits(
@@ -24,6 +26,12 @@ async function deriveKey(password: string, salt: Uint8Array): Promise<Uint8Array
     256
   )
   return new Uint8Array(bits)
+}
+
+/** Derive wrapping key as non-extractable CryptoKey — never exported. */
+async function deriveWrappingKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
+  const bits = await deriveKeyRaw(password, salt)
+  return crypto.subtle.importKey('raw', bits, 'AES-GCM', false, ['encrypt', 'decrypt'])
 }
 
 function openDB(): Promise<IDBDatabase> {
@@ -54,6 +62,14 @@ function normalizeStoredKeys(raw: StoredKeys & { oneTimePrekeys?: unknown }): St
 
 type StoredRaw = StoredKeys | { v: number; salt: string; blob: string }
 
+function isEncryptedBlobV2(raw: StoredRaw): raw is { v: number; salt: string; blob: string } {
+  return typeof raw === 'object' && raw !== null && 'v' in raw && (raw as { v: number }).v === ENCRYPTED_VERSION
+}
+
+function isEncryptedBlobV3(raw: StoredRaw): raw is { v: number; salt: string; blob: string } {
+  return typeof raw === 'object' && raw !== null && 'v' in raw && (raw as { v: number }).v === ENCRYPTED_VERSION_V3
+}
+
 export async function getKeysFromStorage(): Promise<StoredKeys | null> {
   try {
     const raw = await getRawFromStorage()
@@ -76,7 +92,7 @@ export async function isKeysEncrypted(): Promise<boolean> {
 }
 
 function isEncryptedBlob(raw: StoredRaw): raw is { v: number; salt: string; blob: string } {
-  return typeof raw === 'object' && raw !== null && 'v' in raw && (raw as { v: number }).v === ENCRYPTED_VERSION
+  return isEncryptedBlobV2(raw) || isEncryptedBlobV3(raw)
 }
 
 async function getRawFromStorage(): Promise<StoredRaw | undefined> {
@@ -91,7 +107,9 @@ async function getRawFromStorage(): Promise<StoredRaw | undefined> {
   return raw
 }
 
-export async function setKeysInStorage(keys: StoredKeys): Promise<void> {
+export async function setKeysInStorage(keys: StoredKeys | null | undefined): Promise<void> {
+  if (!keys || typeof keys !== 'object') return
+  if (!keys.identityKey || !keys.identitySecret || !keys.signedPrekey) return
   await putRawToStorage(keys)
 }
 
@@ -106,18 +124,22 @@ async function putRawToStorage(data: StoredKeys | { v: number; salt: string; blo
   db.close()
 }
 
-/** Encrypt keys with passphrase and store. Replaces existing keys. */
+/** Encrypt keys with passphrase and store. Uses v3 (AES-GCM + non-extractable wrapping key). */
 export async function setKeysWithPassphrase(keys: StoredKeys, passphrase: string): Promise<void> {
   const salt = crypto.getRandomValues(new Uint8Array(32))
-  const key = await deriveKey(passphrase, salt)
-  const nonce = nacl.randomBytes(NONCE_LENGTH)
-  const plain = JSON.stringify(keys)
-  const ciphertext = nacl.secretbox(decodeUTF8(plain), nonce, key)
-  const blob = new Uint8Array(1 + NONCE_LENGTH + ciphertext.length)
-  blob[0] = ENCRYPTED_VERSION
-  blob.set(nonce, 1)
-  blob.set(ciphertext, 1 + NONCE_LENGTH)
-  await putRawToStorage({ v: ENCRYPTED_VERSION, salt: encodeBase64(salt), blob: encodeBase64(blob) })
+  const wrappingKey = await deriveWrappingKey(passphrase, salt)
+  const iv = crypto.getRandomValues(new Uint8Array(AES_GCM_IV_LENGTH))
+  const plain = new TextEncoder().encode(JSON.stringify(keys))
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv, tagLength: 128 },
+    wrappingKey,
+    plain
+  )
+  const blob = new Uint8Array(1 + iv.length + ciphertext.byteLength)
+  blob[0] = ENCRYPTED_VERSION_V3
+  blob.set(iv, 1)
+  blob.set(new Uint8Array(ciphertext), 1 + iv.length)
+  await putRawToStorage({ v: ENCRYPTED_VERSION_V3, salt: encodeBase64(salt), blob: encodeBase64(blob) })
 }
 
 /** Decrypt keys with passphrase. On success, overwrites storage with plain keys (unlocked). */
@@ -125,14 +147,34 @@ export async function unlockKeysWithPassphrase(passphrase: string): Promise<Stor
   const raw = await getRawFromStorage()
   if (!raw || !isEncryptedBlob(raw)) throw new Error('Keys are not encrypted')
   const blob = decodeBase64(raw.blob)
-  if (blob[0] !== ENCRYPTED_VERSION) throw new Error('Unsupported format')
   const salt = decodeBase64(raw.salt)
-  const key = await deriveKey(passphrase, salt)
-  const nonce = blob.slice(1, 1 + NONCE_LENGTH)
-  const ciphertext = blob.slice(1 + NONCE_LENGTH)
-  const plain = nacl.secretbox.open(ciphertext, nonce, key)
-  if (!plain) throw new Error('Wrong passphrase')
-  const keys = normalizeStoredKeys(JSON.parse(encodeUTF8(plain)) as StoredKeys)
+  let plain: Uint8Array
+
+  if (isEncryptedBlobV3(raw)) {
+    const wrappingKey = await deriveWrappingKey(passphrase, salt)
+    const iv = blob.slice(1, 1 + AES_GCM_IV_LENGTH)
+    const ciphertext = blob.slice(1 + AES_GCM_IV_LENGTH)
+    try {
+      const decrypted = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv, tagLength: 128 },
+        wrappingKey,
+        ciphertext
+      )
+      plain = new Uint8Array(decrypted)
+    } catch {
+      throw new Error('Wrong passphrase')
+    }
+  } else {
+    if (blob[0] !== ENCRYPTED_VERSION) throw new Error('Unsupported format')
+    const key = await deriveKeyRaw(passphrase, salt)
+    const nonce = blob.slice(1, 1 + NACL_NONCE_LENGTH)
+    const ciphertext = blob.slice(1 + NACL_NONCE_LENGTH)
+    const opened = nacl.secretbox.open(ciphertext, nonce, key)
+    if (!opened) throw new Error('Wrong passphrase')
+    plain = opened
+  }
+
+  const keys = normalizeStoredKeys(JSON.parse(new TextDecoder().decode(plain)) as StoredKeys)
   await putRawToStorage(keys)
   return keys
 }
@@ -158,17 +200,20 @@ export async function updateSignedPrekeyInStorage(
 ): Promise<void> {
   const keys = await getKeysFromStorage()
   if (!keys) return
-  await setKeysInStorage({ ...keys, signedPrekey })
+  const current = keys.signedPrekey
+  if (current.key_id === signedPrekey.key_id && current.key === signedPrekey.key) return
+  await putRawToStorage({ ...keys, signedPrekey })
 }
 
 /** Merge new one-time prekeys (from replenishment) into stored keys. */
 export async function mergeOtpksToStorage(entries: Array<{ key_id: number; pub: string; priv: string }>): Promise<void> {
+  if (!entries?.length) return
   const keys = await getKeysFromStorage()
   if (!keys) return
   const existingIds = new Set(keys.oneTimePrekeys.map((o) => o.key_id))
   const toAdd = entries.filter((e) => !existingIds.has(e.key_id))
   if (toAdd.length === 0) return
-  await setKeysInStorage({
+  await putRawToStorage({
     ...keys,
     oneTimePrekeys: [...keys.oneTimePrekeys, ...toAdd],
   })
@@ -177,10 +222,10 @@ export async function mergeOtpksToStorage(entries: Array<{ key_id: number; pub: 
 /** Remove one-time prekey when consumed by Signal protocol. */
 export async function removeOtpkFromStorage(keyId: number): Promise<void> {
   const keys = await getKeysFromStorage()
-  if (!keys?.oneTimePrekeys?.length) return
+  if (!keys || !keys.oneTimePrekeys?.length) return
   const filtered = keys.oneTimePrekeys.filter((o) => o.key_id !== keyId)
   if (filtered.length === keys.oneTimePrekeys.length) return
-  await setKeysInStorage({ ...keys, oneTimePrekeys: filtered })
+  await putRawToStorage({ ...keys, oneTimePrekeys: filtered })
 }
 
 /** Migrate keys from localStorage to IndexedDB, then remove from localStorage. */

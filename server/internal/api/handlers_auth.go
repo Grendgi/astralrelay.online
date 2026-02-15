@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/messenger/server/internal/auth"
+	"github.com/messenger/server/internal/logjson"
 )
 
 type registerRequest struct {
@@ -241,6 +242,7 @@ func (h *authHandler) revokeDevice(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
 	}
+	logjson.Log("audit", map[string]interface{}{"action": "device_revoke", "user_id": userID, "device_id": deviceID.String()})
 	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok"})
 }
 
