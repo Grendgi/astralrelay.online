@@ -121,6 +121,8 @@ services:
       - "traefik.http.services.api.loadbalancer.responseforwarding.flushinterval=1ms"
 
   server2:
+    profiles:
+      - ha
     restart: unless-stopped
     build:
       context: ../..
@@ -163,6 +165,7 @@ services:
       - "traefik.http.routers.api-secure.middlewares=secure-headers,hsts"
       - "traefik.http.services.api.loadbalancer.server.port=8080"
       - "traefik.http.services.api.loadbalancer.passhostheader=true"
+      - "traefik.http.services.api.loadbalancer.responseforwarding.flushinterval=1ms"
 
   web:
     build:

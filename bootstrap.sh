@@ -1,8 +1,13 @@
 #!/usr/bin/env sh
 # Одна команда — полная установка с нуля
-# Запуск: curl -fsSL https://raw.githubusercontent.com/Grendgi/astralrelay.online/main/bootstrap.sh | sudo sh
+# Запуск:
+#   curl -fsSL https://raw.githubusercontent.com/Grendgi/astralrelay.online/main/bootstrap.sh | sudo sh
 #
-# Переменные: REPO_URL, BRANCH, EXPECTED_SHA256, BOOTSTRAP_DIFF=1 (скачать → diff → подтверждение)
+# Переменные:
+#   REPO_URL, BRANCH
+#   EXPECTED_COMMIT (или старое EXPECTED_SHA256) — префикс commit hash (не SHA256)
+#   BOOTSTRAP_DIFF=1 — скачать во временный каталог → diff → подтверждение
+#   INSTALL_DIR=/opt/astralrelay.online
 
 set -e
 
@@ -11,7 +16,10 @@ echo ""
 
 REPO_URL="${REPO_URL:-https://github.com/Grendgi/astralrelay.online}"
 BRANCH="${BRANCH:-main}"
-EXPECTED_SHA256="${EXPECTED_SHA256:-}"
+
+# Backward compatible: EXPECTED_SHA256 раньше использовался как префикс commit
+EXPECTED_COMMIT="${EXPECTED_COMMIT:-${EXPECTED_SHA256:-}}"
+
 BOOTSTRAP_DIFF="${BOOTSTRAP_DIFF:-0}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/astralrelay.online}"
 STAGING_DIR=""
@@ -24,20 +32,28 @@ cleanup_staging() {
 trap cleanup_staging EXIT
 
 do_download() {
-  local dest="$1"
+  dest="$1"
   mkdir -p "$(dirname "$dest")"
+
   if command -v git >/dev/null 2>&1; then
     if [ -d "$dest/.git" ]; then
-      (cd "$dest" && git fetch -q origin "$BRANCH" && git checkout -q "$BRANCH" 2>/dev/null || git pull -q)
+      (cd "$dest" && \
+        git fetch -q origin "$BRANCH" && \
+        git checkout -q "$BRANCH" 2>/dev/null || true)
+
+      # Жёстко приводим к origin/$BRANCH для идемпотентности
+      (cd "$dest" && \
+        git fetch -q origin "$BRANCH" && \
+        git reset -q --hard "origin/$BRANCH" >/dev/null 2>&1 || true)
     else
       rm -rf "$dest"
       git clone -q --depth 1 -b "$BRANCH" "$REPO_URL" "$dest"
     fi
   else
     rm -rf "$dest"
-    TMP_DIR=$(mktemp -d)
+    TMP_DIR="$(mktemp -d)"
     curl -fsSL "$REPO_URL/archive/$BRANCH.tar.gz" | tar xz -C "$TMP_DIR"
-    subdir=$(ls -1 "$TMP_DIR" | head -1)
+    subdir="$(ls -1 "$TMP_DIR" | head -1)"
     mv "$TMP_DIR/$subdir" "$dest"
     rm -rf "$TMP_DIR"
   fi
@@ -45,8 +61,9 @@ do_download() {
 
 if [ "$BOOTSTRAP_DIFF" = "1" ] || [ "$BOOTSTRAP_DIFF" = "true" ]; then
   echo "Режим diff: скачивание во временный каталог..."
-  STAGING_DIR=$(mktemp -d)
+  STAGING_DIR="$(mktemp -d)"
   do_download "$STAGING_DIR"
+
   if [ -d "$INSTALL_DIR" ] && [ -f "$INSTALL_DIR/install.sh" ]; then
     echo ""
     echo "--- diff install.sh (новое vs текущее) ---"
@@ -64,6 +81,7 @@ if [ "$BOOTSTRAP_DIFF" = "1" ] || [ "$BOOTSTRAP_DIFF" = "true" ]; then
       *) echo "Отменено."; exit 0 ;;
     esac
   fi
+
   rm -rf "$INSTALL_DIR"
   mv "$STAGING_DIR" "$INSTALL_DIR"
   STAGING_DIR=""
@@ -73,24 +91,28 @@ else
 fi
 
 cd "$INSTALL_DIR" || exit 1
+
 COMMIT_HASH=""
 if [ -d ".git" ]; then
-  COMMIT_HASH=$(git rev-parse HEAD 2>/dev/null || true)
+  COMMIT_HASH="$(git rev-parse HEAD 2>/dev/null || true)"
 fi
+
 if [ -n "$COMMIT_HASH" ]; then
   echo "Версия: $COMMIT_HASH"
 fi
-if [ -n "$EXPECTED_SHA256" ] && [ -n "$COMMIT_HASH" ]; then
+
+if [ -n "$EXPECTED_COMMIT" ] && [ -n "$COMMIT_HASH" ]; then
   case "$COMMIT_HASH" in
-    $EXPECTED_SHA256*) ;;
+    "$EXPECTED_COMMIT"*) ;;
     *)
-      echo "Ошибка: ожидался commit $EXPECTED_SHA256, получен $COMMIT_HASH"
+      echo "Ошибка: ожидался commit prefix $EXPECTED_COMMIT, получен $COMMIT_HASH"
       exit 1
       ;;
   esac
 fi
 
-INSTALL_AUTO=1 INSTALL_MODE="${INSTALL_MODE:-selfhost}" ./install.sh
+# Важно: всегда запускаем через sh, чтобы не зависеть от chmod +x
+INSTALL_AUTO=1 INSTALL_MODE="${INSTALL_MODE:-selfhost}" sh ./install.sh
 
 echo ""
 echo "Установка завершена. Данные: $INSTALL_DIR${COMMIT_HASH:+ (commit $COMMIT_HASH)}"

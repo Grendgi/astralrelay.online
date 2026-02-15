@@ -17,7 +17,8 @@ cp deploy/main/.env.example deploy/main/.env
 | Компонент       | Роль                                              |
 |-----------------|---------------------------------------------------|
 | Traefik         | Балансировщик :80, dashboard :8082                |
-| server, server2 | Две реплики API (round-robin)                     |
+| server         | API (единственная реплика по умолчанию)           |
+| server2        | Вторая реплика API (профиль ha, round-robin)      |
 | web             | Веб-клиент                                        |
 | postgres        | Primary с wal_level=replica                       |
 | postgres-replica| Реплика для чтения (профиль ha)                   |
