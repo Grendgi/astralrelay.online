@@ -94,9 +94,14 @@ if [ -n "$EXPECTED_COMMIT" ] && [ -n "$COMMIT" ]; then
   esac
 fi
 
-# Если есть TTY и пользователь не просит авто-режим — запускаем wizard
-if [ -t 0 ] && [ "${INSTALL_AUTO:-}" != "1" ]; then
+# Wizard, если не запрошен авто-режим. При curl | sh stdin — pipe, поэтому проверяем /dev/tty
+if [ "${INSTALL_AUTO:-}" = "1" ]; then
+  INSTALL_MODE="${INSTALL_MODE:-selfhost}" sh ./install.sh
+elif [ -t 0 ]; then
   sh ./install.sh --wizard
+elif [ -e /dev/tty ] && [ -r /dev/tty ]; then
+  # Запуск через pipe (curl | sh) — подключаем ввод с терминала
+  sh ./install.sh --wizard < /dev/tty
 else
   INSTALL_AUTO=1 INSTALL_MODE="${INSTALL_MODE:-selfhost}" sh ./install.sh
 fi
