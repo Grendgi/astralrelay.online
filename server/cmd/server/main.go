@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/messenger/server/internal/api"
+	"github.com/messenger/server/internal/logjson"
 	"github.com/messenger/server/internal/auth"
 	"github.com/messenger/server/internal/config"
 	"github.com/messenger/server/internal/db"
@@ -46,7 +47,7 @@ func main() {
 	if cfg.Database.FederationURL != "" {
 		federationDB, err = db.New(ctx, cfg.Database.FederationURL)
 		if err != nil {
-			log.Printf("DATABASE_FEDERATION_URL: %v (using main pool)", err)
+			logjson.Log("server", map[string]interface{}{"error": err.Error(), "fallback": "main pool"})
 			federationDB = nil
 		}
 	}
@@ -56,7 +57,7 @@ func main() {
 
 	dbEnc, err := dbenc.New(cfg.Database.EncryptionKey)
 	if err != nil {
-		log.Printf("DB_ENCRYPTION_KEY invalid (%v), running without DB encryption", err)
+		logjson.Log("server", map[string]interface{}{"error": err.Error(), "fallback": "no DB encryption"})
 		dbEnc = nil
 	}
 	if dbEnc != nil {
@@ -116,19 +117,20 @@ func main() {
 
 	vpnSvc := vpn.New(&cfg.VPN, database)
 	if err := vpnSvc.Nodes().SeedFromJSON(ctx, cfg.VPN.NodesJSON); err != nil {
-		log.Printf("vpn nodes seed: %v", err)
+		logjson.Log("server", map[string]interface{}{"error": err.Error(), "op": "vpn_nodes_seed"})
 	}
 
 	pushSvc := push.New(cfg.Push.VAPIDPublicKey, cfg.Push.VAPIDPrivateKey, database)
 
 	fedSecCfg := federation.SecurityConfig{
-		RateLimit:       cfg.Federation.Security.RateLimit,
-		MaxBodySize:     cfg.Federation.Security.MaxBodySize,
-		AllowlistMode:   cfg.Federation.Security.AllowlistMode,
-		AllowlistPath:   cfg.Federation.Security.AllowlistPath,
-		BlocklistPath:   cfg.Federation.Security.BlocklistPath,
-		BlocklistURL:    cfg.Federation.Security.BlocklistURL,
-		BlocklistReload: time.Duration(cfg.Federation.Security.BlocklistReload) * time.Hour,
+		RateLimit:               cfg.Federation.Security.RateLimit,
+		MaxBodySize:             cfg.Federation.Security.MaxBodySize,
+		AllowlistMode:           cfg.Federation.Security.AllowlistMode,
+		AllowlistPath:           cfg.Federation.Security.AllowlistPath,
+		AllowlistTrustThreshold: cfg.Federation.Security.AllowlistTrustThreshold,
+		BlocklistPath:           cfg.Federation.Security.BlocklistPath,
+		BlocklistURL:            cfg.Federation.Security.BlocklistURL,
+		BlocklistReload:         time.Duration(cfg.Federation.Security.BlocklistReload) * time.Hour,
 	}
 	if fedSecCfg.MaxBodySize <= 0 {
 		fedSecCfg.MaxBodySize = federation.MaxBodySize
@@ -140,6 +142,12 @@ func main() {
 
 	router := api.NewRouter(authSvc, keydirSvc, relaySvc, roomsSvc, mediaSvc, fedClient, fedKeys, cfg.Server.Domain, streamHub, vpnSvc, pushSvc, database, dbEnc, fedSecurity, cfg.Federation.Security.RateLimit, fedMainOnlyDomain, cfg.Federation.Security.AlertWebhookURL)
 
+	redisURL := ""
+	if !cfg.Redis.Disabled && cfg.Redis.URL != "" {
+		redisURL = cfg.Redis.URL
+	}
+	go api.StartLatencyProbe(context.Background(), database.Pool, redisURL)
+
 	port := cfg.Server.Port
 	if port <= 0 {
 		port = 8080
@@ -150,7 +158,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("server listening on %s", srv.Addr)
+		logjson.Log("server", map[string]interface{}{"listen": srv.Addr})
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("listen: %v", err)
 		}
@@ -159,8 +167,8 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Println("shutting down...")
+	logjson.Log("server", map[string]interface{}{"event": "shutting down"})
 	if err := srv.Shutdown(context.Background()); err != nil {
-		log.Printf("shutdown: %v", err)
+		logjson.Log("server", map[string]interface{}{"error": err.Error(), "op": "shutdown"})
 	}
 }

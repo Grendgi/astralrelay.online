@@ -3,12 +3,12 @@ package push
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"strings"
 
 	"github.com/SherClockHolmes/webpush-go"
 	"github.com/google/uuid"
 	"github.com/messenger/server/internal/db"
+	"github.com/messenger/server/internal/logjson"
 )
 
 type Service struct {
@@ -108,12 +108,12 @@ func (s *Service) SendToUser(ctx context.Context, recipientAddr string, payload 
 				TTL:             30,
 			})
 			if err != nil {
-				log.Printf("[push] send: %v", err)
+				logjson.Log("push", map[string]interface{}{"error": err.Error(), "op": "send"})
 				return
 			}
 			defer resp.Body.Close()
 			if resp.StatusCode >= 400 {
-				log.Printf("[push] status %d for %s", resp.StatusCode, ep[:min(50, len(ep))])
+				logjson.Log("push", map[string]interface{}{"status": resp.StatusCode, "endpoint": ep[:min(50, len(ep))]})
 			}
 		}()
 	}

@@ -53,6 +53,15 @@ func parseWGShow(out string) map[string]WGPeerStats {
 	return result
 }
 
+// RemoveWGPeer removes a peer from the WireGuard interface. No-op if iface empty or wg unavailable.
+func (s *Service) RemoveWGPeer(ctx context.Context, pubkey string) {
+	iface := s.cfg.WireGuard.StatsInterface
+	if iface == "" || pubkey == "" {
+		return
+	}
+	_ = exec.CommandContext(ctx, "wg", "set", iface, "peer", pubkey, "remove").Run()
+}
+
 // parseWGTransfer parses "1.23 MiB" or "123 B" etc. into bytes.
 func parseWGTransfer(s string) int64 {
 	s = strings.TrimSpace(s)

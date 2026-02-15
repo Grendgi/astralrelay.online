@@ -57,7 +57,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  updateKeys: (body: { signed_prekey?: { key: string; signature: string; key_id: number }; one_time_prekeys?: Array<{ key: string; key_id: number }> }, token: string) =>
+  updateKeys: (body: { identity_signing_key?: string; signed_prekey?: { key: string; signature: string; key_id: number }; one_time_prekeys?: Array<{ key: string; key_id: number }> }, token: string) =>
     request<Record<string, never>>('/auth/keys', {
       method: 'PUT',
       body: JSON.stringify(body),
@@ -65,7 +65,7 @@ export const api = {
     }),
 
   getKeys: (userID: string, token: string, deviceID?: string) =>
-    request<PrekeyBundle & { device_id?: string }>(
+    request<PrekeyBundle & { device_id?: string; signal_device_id?: number }>(
       deviceID
         ? `/keys/bundle/${encodeURIComponent(userID)}/${encodeURIComponent(deviceID)}`
         : `/keys/bundle/${encodeURIComponent(userID)}`,
@@ -352,6 +352,7 @@ export interface SyncEvent {
   type: string
   sender: string
   recipient: string
+  sender_device?: string // UUID for Signal multi-device
   timestamp: number
   ciphertext: string
   session_id: string

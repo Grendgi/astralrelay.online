@@ -2,6 +2,9 @@ package keydir
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/binary"
+	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -188,9 +191,34 @@ func (s *Service) GetBundleForUser(ctx context.Context, userID string) (*Bundle,
 	return b, devUUID.String(), nil
 }
 
+// UUIDToSignalDeviceID maps device UUID to Signal Protocol integer device ID (1–16383).
+func UUIDToSignalDeviceID(id uuid.UUID) int {
+	if id == uuid.Nil {
+		return 1
+	}
+	n := binary.BigEndian.Uint32(id[:4])
+	return int(n%16383) + 1
+}
+
+// MaxOneTimePrekeysPerDevice limits one-time prekeys per device (protocol recommends 100–500).
+const MaxOneTimePrekeysPerDevice = 500
+
+// ErrInvalidSignature is returned when signed prekey signature verification fails.
+var ErrInvalidSignature = fmt.Errorf("signed prekey signature invalid")
+
+// ErrPrekeyQuotaExceeded is returned when one-time prekeys would exceed the per-device limit.
+var ErrPrekeyQuotaExceeded = fmt.Errorf("one-time prekeys quota exceeded")
+
 // UpdateKeys updates signed prekey (if provided) and appends one-time prekeys.
-func (s *Service) UpdateKeys(ctx context.Context, userID int64, deviceID uuid.UUID, signedPrekey, signedPrekeySig []byte, signedPrekeyID int64, oneTimePrekeys []PrekeyItem) error {
+// If identitySigningKey (Ed25519 public) is provided with signed prekey, signature is verified.
+func (s *Service) UpdateKeys(ctx context.Context, userID int64, deviceID uuid.UUID, signedPrekey, signedPrekeySig []byte, signedPrekeyID int64, oneTimePrekeys []PrekeyItem, identitySigningKey []byte) error {
 	if len(signedPrekey) > 0 {
+		if len(identitySigningKey) == ed25519.PublicKeySize && len(signedPrekeySig) > 0 {
+			msg := []byte(base64.StdEncoding.EncodeToString(signedPrekey))
+			if !ed25519.Verify(identitySigningKey, msg, signedPrekeySig) {
+				return ErrInvalidSignature
+			}
+		}
 		spk, spkSig := signedPrekey, signedPrekeySig
 		if s.enc != nil {
 			var err error
@@ -213,22 +241,31 @@ func (s *Service) UpdateKeys(ctx context.Context, userID int64, deviceID uuid.UU
 		}
 	}
 
-	for _, pk := range oneTimePrekeys {
-		pkStored := pk.Key
-		if s.enc != nil {
-			var encErr error
-			pkStored, encErr = s.enc.Encrypt(pk.Key)
-			if encErr != nil {
-				return encErr
-			}
-		}
-		_, err := s.db.Pool.Exec(ctx,
-			`INSERT INTO one_time_prekeys (device_id, key_id, prekey) VALUES ($1, $2, $3)
-			 ON CONFLICT (device_id, key_id) DO NOTHING`,
-			deviceID, pk.KeyID, pkStored,
-		)
-		if err != nil {
+	if len(oneTimePrekeys) > 0 {
+		var current int
+		if err := s.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM one_time_prekeys WHERE device_id = $1`, deviceID).Scan(&current); err != nil {
 			return err
+		}
+		if current+len(oneTimePrekeys) > MaxOneTimePrekeysPerDevice {
+			return ErrPrekeyQuotaExceeded
+		}
+		for _, pk := range oneTimePrekeys {
+			pkStored := pk.Key
+			if s.enc != nil {
+				var encErr error
+				pkStored, encErr = s.enc.Encrypt(pk.Key)
+				if encErr != nil {
+					return encErr
+				}
+			}
+			_, err := s.db.Pool.Exec(ctx,
+				`INSERT INTO one_time_prekeys (device_id, key_id, prekey) VALUES ($1, $2, $3)
+				 ON CONFLICT (device_id, key_id) DO NOTHING`,
+				deviceID, pk.KeyID, pkStored,
+			)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -197,14 +197,15 @@ func (s *Service) AcceptTransaction(ctx context.Context, txnID string, events []
 }
 
 type SyncEvent struct {
-	EventID    string
-	Type       string
-	Sender     string
-	Recipient  string
-	Timestamp  int64
-	Ciphertext []byte
-	SessionID  string
-	Status     string // queued | delivered
+	EventID      string
+	Type         string
+	Sender       string
+	Recipient    string
+	SenderDevice string // UUID for Signal multi-device
+	Timestamp    int64
+	Ciphertext   []byte
+	SessionID    string
+	Status       string // queued | delivered
 }
 
 // DeliveredUpdate is sent to the message sender when recipient fetches the message.
@@ -244,7 +245,7 @@ func (s *Service) Sync(ctx context.Context, recipientUserID int64, deviceID uuid
 		orderBy = "ORDER BY created_at DESC" // последние сообщения первыми
 	}
 	// recipient = ANY: входящие (мне или в мои комнаты); sender = recipientAddr: мои исходящие (DM)
-	query := `SELECT event_id, msg_type, sender, recipient, timestamp, ciphertext, ciphertexts, session_id, status, created_at
+	query := `SELECT event_id, msg_type, sender, recipient, sender_device, timestamp, ciphertext, ciphertexts, session_id, status, created_at
 		 FROM message_queue
 		 WHERE (recipient = ANY($1::text[]) OR sender = $4) ` + statusFilter + `
 		   AND ($2::timestamptz IS NULL OR created_at > $2::timestamptz)
@@ -266,11 +267,13 @@ func (s *Service) Sync(ctx context.Context, recipientUserID int64, deviceID uuid
 		var ciphertext []byte
 		var ciphertextsRaw []byte
 		var status string
-		err := rows.Scan(&e.EventID, &e.Type, &e.Sender, &e.Recipient, &e.Timestamp, &ciphertext, &ciphertextsRaw, &e.SessionID, &status, &createdAt)
+		var senderDevice string
+		err := rows.Scan(&e.EventID, &e.Type, &e.Sender, &e.Recipient, &senderDevice, &e.Timestamp, &ciphertext, &ciphertextsRaw, &e.SessionID, &status, &createdAt)
 		if err != nil {
 			return nil, "", nil, err
 		}
 		e.Status = status
+		e.SenderDevice = senderDevice
 		e.Ciphertext = ciphertext
 		if len(ciphertextsRaw) > 0 {
 			var ciphertexts map[string]string

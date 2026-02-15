@@ -12,6 +12,7 @@ const VERSION = 1
 export interface BackupPayload {
   identityKey: string
   identitySecret: string
+  identitySigningKey?: string // Ed25519 public, base64 — для проверки signed prekey
   signedPrekey: { key: string; signature: string; secret: string }
   oneTimePrekeys?: string[] // optional, secrets not stored; on restore we regenerate
 }

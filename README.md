@@ -16,7 +16,7 @@
 
 | Возможность | Описание |
 |-------------|----------|
-| 🔐 **E2EE** | End-to-end шифрование (X3DH + Double Ratchet) — сервер не видит содержимое сообщений |
+| 🔐 **E2EE** | End-to-end шифрование (Signal Protocol + fallback MVP); persistent store (IndexedDB), Safety number для проверки MITM |
 | 🌐 **Федерация** | Децентрализованная сеть: главный хаб + self-host узлы, обмен сообщениями между доменами |
 | 🔒 **VPN** | Xray (VLESS, VMess, Trojan) — пользователь скачивает конфиг в один клик |
 | 📱 **Push** | Web Push уведомления (VAPID) |

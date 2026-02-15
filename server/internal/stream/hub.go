@@ -3,9 +3,9 @@ package stream
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"sync"
 
+	"github.com/messenger/server/internal/logjson"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -60,16 +60,16 @@ func NewHubWithRedis(redisURL string) *Hub {
 	if redisURL != "" {
 		opts, err := redis.ParseURL(redisURL)
 		if err != nil {
-			log.Printf("[stream] invalid Redis URL: %v, using in-memory only", err)
+			logjson.Log("stream_redis", map[string]interface{}{"error": err.Error(), "fallback": "in-memory"})
 		} else {
 			h.redis = redis.NewClient(opts)
 			if err := h.redis.Ping(ctx).Err(); err != nil {
-				log.Printf("[stream] Redis ping failed: %v, using in-memory only", err)
+				logjson.Log("stream_redis", map[string]interface{}{"error": err.Error(), "fallback": "in-memory"})
 				h.redis = nil
 			} else {
 				h.pubsub = h.redis.Subscribe(ctx, redisChannel, redisTypingChannel, redisDeliveryCh, redisReadCh)
 				go h.runRedisSubscriber()
-				log.Printf("[stream] Redis Pub/Sub enabled for multi-node")
+				logjson.Log("stream_redis", map[string]interface{}{"status": "enabled"})
 			}
 		}
 	}
@@ -236,7 +236,7 @@ func (h *Hub) Notify(recipient, eventID string) {
 	if h.redis != nil {
 		payload, _ := json.Marshal(ev)
 		if err := h.redis.Publish(h.ctx, redisChannel, payload).Err(); err != nil {
-			log.Printf("[stream] Redis publish: %v", err)
+			logjson.Log("stream_redis", map[string]interface{}{"error": err.Error(), "op": "publish"})
 		}
 	}
 

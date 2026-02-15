@@ -306,7 +306,8 @@ const filePreviewStyles: Record<string, React.CSSProperties> = {
   },
 }
 import { encrypt, decrypt, isE2EEPayload } from '../crypto/e2ee'
-import { signalEncrypt, signalDecrypt, isSignalCiphertext } from '../crypto/signal'
+import { computeSafetyNumber } from '../crypto/fingerprint'
+import { signalEncrypt, signalDecrypt, isSignalCiphertext, uuidToSignalDeviceId } from '../crypto/signal'
 import { createBackup, restoreBackup } from '../crypto/backup'
 import { useTheme } from '../hooks/useTheme'
 
@@ -391,6 +392,8 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
   const [pushEnabled, setPushEnabled] = useState(false)
   const [pushLoading, setPushLoading] = useState(false)
   const [decryptedSignal, setDecryptedSignal] = useState<Record<string, string>>({})
+  const [fingerprintModal, setFingerprintModal] = useState<{ recipient: string; safetyNumber: string } | null>(null)
+  const [fingerprintLoading, setFingerprintLoading] = useState(false)
   useEffect(() => {
     if ('serviceWorker' in navigator && 'PushManager' in window && Notification.permission === 'granted') {
       navigator.serviceWorker.ready.then((reg) => {
@@ -411,6 +414,29 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    if (!fingerprintModal) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFingerprintModal(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [fingerprintModal])
+
+  const showFingerprint = useCallback(async () => {
+    const r = normalizeRecipient(recipient, user.user_id)
+    if (!r || isRoomAddr(r) || !keys) return
+    setFingerprintLoading(true)
+    setFingerprintModal(null)
+    try {
+      const bundle = await api.getKeys(r, token)
+      const safetyNumber = await computeSafetyNumber(keys.identityKey, bundle.identity_key)
+      setFingerprintModal({ recipient: r, safetyNumber })
+    } catch {
+      setFingerprintModal({ recipient: r, safetyNumber: '— ключи недоступны —' })
+    } finally {
+      setFingerprintLoading(false)
+    }
+  }, [recipient, user.user_id, keys, token])
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [events, recipient])
 
@@ -421,7 +447,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
     events
       .filter((ev) => ev.ciphertext?.startsWith('sig1:'))
       .forEach((ev) => {
-        signalDecrypt(ev.ciphertext!, ourKeys, ev.sender).then(
+        signalDecrypt(ev.ciphertext!, ourKeys, ev.sender, ev.sender_device).then(
           (plain) => setDecryptedSignal((prev) => (prev[ev.event_id] ? prev : { ...prev, [ev.event_id]: plain })),
           () => setDecryptedSignal((prev) => (prev[ev.event_id] ? prev : { ...prev, [ev.event_id]: '[decrypt failed]' }))
         )
@@ -783,6 +809,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
       const payload = {
         identityKey: keys.identityKey,
         identitySecret: keys.identitySecret,
+        ...(keys.identitySigningKey && { identitySigningKey: keys.identitySigningKey }),
         signedPrekey: keys.signedPrekey,
         oneTimePrekeys: keys.oneTimePrekeys,
       }
@@ -890,7 +917,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
           const ourKeys = { identityKey: keys.identityKey, identitySecret: keys.identitySecret, signedPrekey: keys.signedPrekey }
           const ctRecipient = await signalEncrypt(payload, bundle, ourKeys, r).catch(() => encrypt(payload, bundle))
           const selfBundle = { identity_key: keys.identityKey, signed_prekey: { key: keys.signedPrekey.key, signature: keys.signedPrekey.signature, key_id: 1 } }
-          const ctSelf = await signalEncrypt(payload, selfBundle, ourKeys, user.user_id).catch(() => encrypt(payload, selfBundle))
+          const ctSelf = await signalEncrypt(payload, selfBundle, ourKeys, user.user_id, uuidToSignalDeviceId(user.device_id)).catch(() => encrypt(payload, selfBundle))
           content = { ciphertexts: { [r]: ctRecipient, [user.user_id]: ctSelf }, session_id: 'sess_mvp' }
         } catch (e) {
           if (e instanceof ApiError && e.status === 404) {
@@ -964,7 +991,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
           const ourKeys = { identityKey: keys.identityKey, identitySecret: keys.identitySecret, signedPrekey: keys.signedPrekey }
           const ctRecipient = await signalEncrypt(plaintext, bundle, ourKeys, r).catch(() => encrypt(plaintext, bundle))
           const selfBundle = { identity_key: keys.identityKey, signed_prekey: { key: keys.signedPrekey.key, signature: keys.signedPrekey.signature, key_id: 1 } }
-          const ctSelf = await signalEncrypt(plaintext, selfBundle, ourKeys, user.user_id).catch(() => encrypt(plaintext, selfBundle))
+          const ctSelf = await signalEncrypt(plaintext, selfBundle, ourKeys, user.user_id, uuidToSignalDeviceId(user.device_id)).catch(() => encrypt(plaintext, selfBundle))
           content = { ciphertexts: { [r]: ctRecipient, [user.user_id]: ctSelf }, session_id: 'sess_mvp' }
         } catch (e) {
           if (e instanceof ApiError && e.status === 404) {
@@ -1528,6 +1555,17 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                     ? `Комната: ${rooms.find((r) => r.address === normalizeRecipient(recipient, user.user_id))?.name ?? recipient}`
                     : `Чат с ${normalizeRecipient(recipient, user.user_id)}`}
                 </p>
+                {!isRoomAddr(normalizeRecipient(recipient, user.user_id)) && keys && (
+                  <button
+                    type="button"
+                    onClick={showFingerprint}
+                    disabled={fingerprintLoading}
+                    style={{ ...styles.themeBtn, fontSize: 12, padding: '4px 8px' }}
+                    title="Проверить ключ (Safety number)"
+                  >
+                    {fingerprintLoading ? '…' : '🔐 Отпечаток'}
+                  </button>
+                )}
                 {typingFrom && ((typingRoom && currentRecipient === typingRoom) || (!typingRoom && currentRecipient === typingFrom)) && (
                   <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>{typingFrom.replace(/^@([^:]+).*/, '$1')} печатает…</span>
                 )}
@@ -1735,6 +1773,63 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
         </div>
         </>
         )}
+      {fingerprintModal && (() => {
+        const close = () => setFingerprintModal(null)
+        return (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="fingerprint-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1000,
+            background: 'rgba(0,0,0,0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+          onClick={close}
+        >
+          <div
+            style={{
+              background: 'var(--surface)',
+              borderRadius: 12,
+              padding: 24,
+              maxWidth: 400,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="fingerprint-title" style={{ margin: '0 0 12px', fontSize: 18 }}>Отпечаток ключа (Safety number)</h3>
+            <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--text-muted)' }}>
+              Сравните с {fingerprintModal.recipient} лично. Если совпадает — канал защищён от MITM.
+            </p>
+            <pre
+              style={{
+                margin: 0,
+                padding: 12,
+                background: 'var(--bg)',
+                borderRadius: 8,
+                fontSize: 13,
+                letterSpacing: 0.5,
+                wordBreak: 'break-all',
+                whiteSpace: 'pre-wrap',
+              }}
+            >
+              {fingerprintModal.safetyNumber}
+            </pre>
+            <button
+              type="button"
+              onClick={close}
+              style={{ ...styles.vpnBtn, marginTop: 16 }}
+            >
+              Закрыть
+            </button>
+          </div>
+        </div>
+        )
+      })()}
       </main>
     </div>
   )

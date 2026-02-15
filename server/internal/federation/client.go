@@ -14,21 +14,32 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
+const discoveryCacheTTL = 5 * time.Minute
+
+type cachedEndpoint struct {
+	endpoint string
+	expires  time.Time
+}
+
 type Client struct {
-	domain     string
-	mainDomain string // if set, send all remote transactions via Main (main_only mode)
-	keys       *ServerKeys
-	httpClient *http.Client
+	domain        string
+	mainDomain    string // if set, send all remote transactions via Main (main_only mode)
+	keys          *ServerKeys
+	httpClient    *http.Client
+	discoveryCache map[string]cachedEndpoint
+	discoveryMu   sync.RWMutex
 }
 
 func NewClient(domain string, keys *ServerKeys) *Client {
 	return &Client{
-		domain:     domain,
-		keys:       keys,
-		httpClient: httpClientWithTLS(nil, 30*time.Second),
+		domain:         domain,
+		keys:           keys,
+		httpClient:     httpClientWithTLS(nil, 30*time.Second),
+		discoveryCache: make(map[string]cachedEndpoint),
 	}
 }
 
@@ -43,17 +54,18 @@ func NewClientWithMain(domain, mainDomain string, keys *ServerKeys) *Client {
 func NewClientWithMTLS(domain string, keys *ServerKeys, clientCert, clientKey string) *Client {
 	tlsConfig, err := loadClientTLS(clientCert, clientKey)
 	if err != nil {
-		// Fall back to plain client if cert load fails
 		return &Client{
-			domain:     domain,
-			keys:       keys,
-			httpClient: &http.Client{Timeout: 30 * time.Second},
+			domain:         domain,
+			keys:           keys,
+			httpClient:     &http.Client{Timeout: 30 * time.Second},
+			discoveryCache: make(map[string]cachedEndpoint),
 		}
 	}
 	return &Client{
-		domain:     domain,
-		keys:       keys,
-		httpClient: httpClientWithTLS(tlsConfig, 30*time.Second),
+		domain:         domain,
+		keys:           keys,
+		httpClient:     httpClientWithTLS(tlsConfig, 30*time.Second),
+		discoveryCache: make(map[string]cachedEndpoint),
 	}
 }
 
@@ -114,6 +126,14 @@ func (c *Client) scheme(domain string) string {
 }
 
 func (c *Client) resolveEndpoint(ctx context.Context, remoteDomain string) (string, error) {
+	domain := strings.ToLower(strings.TrimSpace(remoteDomain))
+	c.discoveryMu.RLock()
+	if ce, ok := c.discoveryCache[domain]; ok && time.Now().Before(ce.expires) {
+		c.discoveryMu.RUnlock()
+		return ce.endpoint, nil
+	}
+	c.discoveryMu.RUnlock()
+
 	scheme := c.scheme(remoteDomain)
 	url := fmt.Sprintf("%s://%s/.well-known/federation", scheme, remoteDomain)
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -123,17 +143,18 @@ func (c *Client) resolveEndpoint(ctx context.Context, remoteDomain string) (stri
 	}
 	defer resp.Body.Close()
 	base := fmt.Sprintf("%s://%s/federation/v1", c.scheme(remoteDomain), remoteDomain)
-	if resp.StatusCode != http.StatusOK {
-		return base, nil
+	endpoint := base
+	if resp.StatusCode == http.StatusOK {
+		var cfg FederationConfig
+		if json.NewDecoder(resp.Body).Decode(&cfg) == nil && cfg.Endpoint != "" {
+			endpoint = cfg.Endpoint
+		}
 	}
-	var cfg FederationConfig
-	if json.NewDecoder(resp.Body).Decode(&cfg) != nil {
-		return base, nil
-	}
-	if cfg.Endpoint != "" {
-		return cfg.Endpoint, nil
-	}
-	return base, nil
+
+	c.discoveryMu.Lock()
+	c.discoveryCache[domain] = cachedEndpoint{endpoint: endpoint, expires: time.Now().Add(discoveryCacheTTL)}
+	c.discoveryMu.Unlock()
+	return endpoint, nil
 }
 
 func (c *Client) signRequest(method, url, body string) (headers map[string]string) {

@@ -12,6 +12,7 @@
 | `FEDERATION_MAX_BODY_SIZE` | 1048576 | Макс. размер body (1MB) |
 | `FEDERATION_ALLOWLIST_MODE` | auto | `auto`, `manual`, `open` |
 | `FEDERATION_ALLOWLIST_PATH` | — | Файл allowlist (один домен на строку) |
+| `FEDERATION_ALLOWLIST_TRUST_THRESHOLD` | 1 | auto: минимум успешных транзакций перед добавлением в allowlist |
 | `FEDERATION_BLOCKLIST_PATH` | — | Локальный файл blocklist |
 | `FEDERATION_BLOCKLIST_URL` | — | URL для загрузки blocklist (JSON-массив или текст) |
 | `FEDERATION_BLOCKLIST_RELOAD_HOURS` | 6 | Интервал обновления blocklist из URL |
@@ -20,6 +21,8 @@
 | `FEDERATION_MTLS_CLIENT_CERT` | — | Путь к клиентскому сертификату (PEM) |
 | `FEDERATION_MTLS_CLIENT_KEY` | — | Путь к приватному ключу (PEM) |
 | `FEDERATION_ALERT_WEBHOOK_URL` | — | Webhook URL: POST при rate limit и blocklist |
+
+**Кеширование discovery:** запросы `/.well-known/federation` к удалённым доменам кешируются на 5 минут. Это снижает нагрузку при повторных транзакциях на тот же домен.
 
 ---
 

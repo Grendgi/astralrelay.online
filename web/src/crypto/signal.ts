@@ -25,8 +25,27 @@ export interface StoredKeys {
   signedPrekey: { key: string; signature: string; secret: string }
 }
 
+/** Derive Signal device ID from backend device UUID. Must match server's UUIDToSignalDeviceID. */
+export function uuidToSignalDeviceId(uuid: string): number {
+  if (!uuid || uuid.length < 8) return 1
+  const hex = uuid.replace(/-/g, '').slice(0, 8)
+  const n = parseInt(hex, 16)
+  if (isNaN(n)) return 1
+  return Math.max(1, (n % 16383) + 1)
+}
+
+/** Resolve Signal device ID from bundle (signal_device_id or derive from device_id). */
+function bundleSignalDeviceId(bundle: PrekeyBundle & { device_id?: string; signal_device_id?: number }): number {
+  if (typeof bundle.signal_device_id === 'number' && bundle.signal_device_id >= 1) return bundle.signal_device_id
+  if (bundle.device_id) return uuidToSignalDeviceId(bundle.device_id)
+  return 1
+}
+
 /** Convert our PrekeyBundle to libsignal DeviceType. */
-function bundleToDeviceType(bundle: PrekeyBundle) {
+function bundleToDeviceType(
+  bundle: PrekeyBundle & { device_id?: string; signal_device_id?: number },
+  signalDeviceId: number
+) {
   const signedPreKey = {
     keyId: bundle.signed_prekey.key_id,
     publicKey: b64ToBuf(bundle.signed_prekey.key),
@@ -41,7 +60,7 @@ function bundleToDeviceType(bundle: PrekeyBundle) {
   }
   return {
     registrationId: 0,
-    deviceId: 1,
+    deviceId: signalDeviceId,
     identityKey: b64ToBuf(bundle.identity_key),
     signedPreKey,
     preKeyId: undefined,
@@ -51,40 +70,42 @@ function bundleToDeviceType(bundle: PrekeyBundle) {
   }
 }
 
-import { InMemorySignalStore } from './signal-store'
+import { IndexedDBSignalStore } from './signal-store'
 
-/** Populate store with our keys. */
-function initStore(store: InMemorySignalStore, keys: StoredKeys): void {
+/** Populate persistent store with our keys. */
+async function initStore(store: IndexedDBSignalStore, keys: StoredKeys): Promise<void> {
   const identityKeyPair = {
     pubKey: b64ToBuf(keys.identityKey),
     privKey: b64ToBuf(keys.identitySecret),
   }
-  store.put('identityKey', identityKeyPair)
-  store.put('registrationId', 0x1234)
+  await store.storeIdentityKeyPair(identityKeyPair)
+  await store.storeLocalRegistrationId(0x1234)
 
   const signedPreKeyPair = {
     pubKey: b64ToBuf(keys.signedPrekey.key),
     privKey: b64ToBuf(keys.signedPrekey.secret),
   }
-  store.put('25519KeysignedKey1', signedPreKeyPair)
+  await store.storeSignedPreKey(1, signedPreKeyPair)
 }
 
 /**
  * Encrypt with Signal protocol. Returns "sig1:" + base64 or throws (fallback to MVP).
+ * recipientBundle may include device_id/signal_device_id for multi-device.
  */
 export async function signalEncrypt(
   plaintext: string,
-  recipientBundle: PrekeyBundle,
+  recipientBundle: PrekeyBundle & { device_id?: string; signal_device_id?: number },
   ourKeys: StoredKeys,
   recipientAddr: string,
-  deviceId: number = 1
+  deviceId?: number
 ): Promise<string> {
   const lib = await import('@privacyresearch/libsignal-protocol-typescript')
-  const store = new InMemorySignalStore()
-  initStore(store, ourKeys)
+  const store = new IndexedDBSignalStore()
+  await initStore(store, ourKeys)
 
-  const address = new lib.SignalProtocolAddress(recipientAddr, deviceId)
-  const bundle = bundleToDeviceType(recipientBundle)
+  const sigDeviceId = deviceId ?? bundleSignalDeviceId(recipientBundle)
+  const address = new lib.SignalProtocolAddress(recipientAddr, sigDeviceId)
+  const bundle = bundleToDeviceType(recipientBundle, sigDeviceId)
 
   const sessionBuilder = new lib.SessionBuilder(store, address)
   await sessionBuilder.processPreKey(bundle)
@@ -101,20 +122,27 @@ export async function signalEncrypt(
 
 /**
  * Decrypt Signal protocol message. Throws if not Signal format or decrypt fails.
+ * senderDeviceId: use ev.sender_device (UUID) with uuidToSignalDeviceId, or pass number.
  */
 export async function signalDecrypt(
   ciphertext: string,
   ourKeys: StoredKeys,
   senderAddr: string,
-  deviceId: number = 1
+  senderDeviceId?: number | string
 ): Promise<string> {
   if (!ciphertext.startsWith(SIGNAL_PREFIX)) throw new Error('Not Signal format')
 
   const lib = await import('@privacyresearch/libsignal-protocol-typescript')
-  const store = new InMemorySignalStore()
-  initStore(store, ourKeys)
+  const store = new IndexedDBSignalStore()
+  await initStore(store, ourKeys)
 
-  const address = new lib.SignalProtocolAddress(senderAddr, deviceId)
+  const sigDeviceId =
+    typeof senderDeviceId === 'number'
+      ? senderDeviceId
+      : typeof senderDeviceId === 'string'
+        ? uuidToSignalDeviceId(senderDeviceId)
+        : 1
+  const address = new lib.SignalProtocolAddress(senderAddr, sigDeviceId)
   const sessionCipher = new lib.SessionCipher(store, address)
 
   const raw = ciphertext.slice(SIGNAL_PREFIX.length)

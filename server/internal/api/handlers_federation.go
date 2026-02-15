@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/messenger/server/internal/federation"
+	"github.com/messenger/server/internal/logjson"
 	"github.com/messenger/server/internal/keydir"
 	"github.com/messenger/server/internal/relay"
 	"github.com/messenger/server/internal/stream"
@@ -95,7 +96,7 @@ func (h *federationHandler) transaction(w http.ResponseWriter, r *http.Request) 
 	if h.security != nil && h.security.IsBlocked(origin) {
 		recordFederationBlocklist(origin)
 		SendFederationAlert(h.alertWebhookURL, "blocklist", origin)
-		log.Printf("federation: blocked domain %s", origin)
+		logjson.Log("federation_blocked", map[string]interface{}{"domain": origin})
 		writeError(w, http.StatusForbidden, "blocked", "Domain is blocked")
 		return
 	}
@@ -171,8 +172,8 @@ func (h *federationHandler) transaction(w http.ResponseWriter, r *http.Request) 
 			Timestamp:    e.Timestamp,
 		}
 	}
-	// Auto allowlist: add domain on first valid transaction
-	if h.security != nil && !h.security.IsAllowed(origin) {
+	// Auto allowlist: add domain after N successful transactions (trust threshold)
+	if h.security != nil && !h.security.IsAllowed(origin) && h.security.RecordSuccessfulTransaction(origin) {
 		_ = h.security.AddToAllowlist(origin)
 	}
 	accepted, rejected := h.relay.AcceptTransaction(r.Context(), req.TransactionID, events)

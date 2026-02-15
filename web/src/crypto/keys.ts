@@ -22,6 +22,7 @@ export async function generateKeys() {
   return {
     identityKey: encodeBase64(identityKeyPair.publicKey),
     identitySecret: encodeBase64(identityKeyPair.secretKey),
+    identitySigningKey: encodeBase64(sigKeyPair.publicKey),
     signedPrekey: {
       key: encodeBase64(signedPrekeyPair.publicKey),
       signature: encodeBase64(signature),

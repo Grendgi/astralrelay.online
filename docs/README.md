@@ -34,6 +34,7 @@
 | [Форматы сообщений](./protocol/01-message-formats.md) | Envelope, типы событий (text, file) |
 | [Модель ключей](./protocol/02-key-model.md) | Identity keys, prekeys, жизненный цикл, X3DH/Double Ratchet |
 | [Интеграция libsignal](./LIBSIGNAL-INTEGRATION.md) | План перехода на полноценный Signal protocol |
+| [E2EE Threat Model](./E2EE-THREAT-MODEL.md) | Угрозы, MITM, аутентификация шифротекста |
 | [Усиление безопасности](./SECURITY-HARDENING.md) | Roadmap и чеклист защиты |
 | [Push / VAPID](./PUSH-VAPID.md) | Генерация ключей, настройка push |
 | [Федерация (setup)](./FEDERATION-SETUP.md) | Связь между инстансами |
@@ -60,9 +61,11 @@
 
 - **Чаты 1:1** + **Файлы**
 - 1 устройство на аккаунт (упрощение для MVP)
-- E2EE: X3DH + Double Ratchet (Signal-подобная схема)
+- E2EE: упрощённая схема (X25519 DH + NaCl secretbox); опционально — Signal Protocol (`sig1:`)
 - Федерация по модели email/Matrix
 - VPN — отдельный модуль, плагинная архитектура
+
+> Подробнее об E2EE: [LIBSIGNAL-INTEGRATION.md](LIBSIGNAL-INTEGRATION.md)
 
 ## Версионирование
 

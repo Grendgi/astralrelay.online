@@ -27,18 +27,6 @@ func BuildWireGuardConf(clientPrivKey, clientPubKey, serverPubKey, endpoint, cli
 	return b.String()
 }
 
-// NextClientAddress returns the next free address in subnet 10.66.66.0/24.
-// In MVP we use a simple counter; production would check DB for existing addresses.
-func NextClientAddress(used []string) string {
-	usedSet := make(map[string]bool)
-	for _, a := range used {
-		usedSet[a] = true
-	}
-	for i := 2; i < 254; i++ {
-		addr := fmt.Sprintf("10.66.66.%d/32", i)
-		if !usedSet[addr] {
-			return addr
-		}
-	}
-	return "10.66.66.2/32"
-}
+// Address allocation is done transactionally via vpn_wg_addr_seq (migration 016).
+// client_address is stored as inet in vpn_peers (migration 017); use GIST index
+// and network operators (&&, >>=, etc.) for subnet/overlap queries.

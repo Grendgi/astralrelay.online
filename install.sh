@@ -139,15 +139,26 @@ update_env() {
   fi
 }
 
+get_env() {
+  grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -n1 | cut -d= -f2- | sed 's/^"//;s/"$//'
+}
+
+set_if_missing() {
+  key="$1"; val="$2"
+  cur="$(get_env "$key")"
+  [ -n "$cur" ] && return 0
+  update_env "$key" "$val"
+}
+
 rand_base64() { n="${1:-32}"; openssl rand -base64 "$n" 2>/dev/null || head -c "$((n*3/4))" /dev/urandom | base64 2>/dev/null || echo "change-me"; }
 
-# Секреты
+# Секреты — генерируем только если ещё не заданы (безопасно при повторном install)
 update_env "SERVER_DOMAIN" "$DOMAIN"
-update_env "JWT_SECRET" "$(rand_base64 32)"
-update_env "POSTGRES_PASSWORD" "$(rand_base64 24)"
-update_env "MINIO_ROOT_PASSWORD" "$(rand_base64 24)"
+set_if_missing "JWT_SECRET" "$(rand_base64 32)"
+set_if_missing "POSTGRES_PASSWORD" "$(rand_base64 24)"
+set_if_missing "MINIO_ROOT_PASSWORD" "$(rand_base64 24)"
 KEY=$(rand_base64 32)
-[ -n "$KEY" ] && update_env "DB_ENCRYPTION_KEY" "$KEY"
+[ -n "$KEY" ] && set_if_missing "DB_ENCRYPTION_KEY" "$KEY"
 
 # LETSENCRYPT_EMAIL — для nip.io/домена
 if [ "$DOMAIN" != "localhost" ] && ! grep -q '^LETSENCRYPT_EMAIL=.' "$ENV_FILE" 2>/dev/null; then

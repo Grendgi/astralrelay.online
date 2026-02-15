@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/messenger/server/internal/logjson"
 	"github.com/xtls/xray-core/app/proxyman/command"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/serial"
@@ -19,6 +20,8 @@ const (
 	inboundTagVMess  = "vmess-in"
 	inboundTagVLESS  = "vless-in"
 	inboundTagTrojan = "trojan-in"
+	xrayRetries      = 3
+	xrayBackoffBase  = 200 * time.Millisecond
 )
 
 // XrayAPI calls Xray gRPC API to add/remove users. Nil-safe: no-op if addr is empty.
@@ -56,75 +59,108 @@ func (a *XrayAPI) Close() error {
 	return nil
 }
 
-// AddVMessUser adds a VMess user to the inbound.
-func (a *XrayAPI) AddVMessUser(ctx context.Context, uuid, email string) error {
+// xrayRetry runs fn with exponential backoff retries. Logs on final failure.
+func (a *XrayAPI) xrayRetry(ctx context.Context, op string, fn func(context.Context) error) error {
 	if a.client == nil {
 		return nil
 	}
-	user := &protocol.User{
-		Email: email,
-		Account: serial.ToTypedMessage(&vmess.Account{
-			Id:      uuid,
-			AlterId: 0,
-		}),
+	var lastErr error
+	backoff := xrayBackoffBase
+	for attempt := 0; attempt < xrayRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+				backoff *= 2
+			}
+		}
+		lastErr = fn(ctx)
+		if lastErr == nil {
+			return nil
+		}
 	}
-	op := serial.ToTypedMessage(&command.AddUserOperation{User: user})
-	_, err := a.client.AlterInbound(ctx, &command.AlterInboundRequest{
-		Tag:       inboundTagVMess,
-		Operation: op,
+	logjson.Log("xray_failed", map[string]interface{}{"op": op, "attempts": xrayRetries, "error": lastErr.Error()})
+	return lastErr
+}
+
+// AddVMessUser adds a VMess user to the inbound.
+func (a *XrayAPI) AddVMessUser(ctx context.Context, uuid, email string) error {
+	return a.xrayRetry(ctx, "AddVMessUser", func(ctx context.Context) error {
+		if a.client == nil {
+			return nil
+		}
+		user := &protocol.User{
+			Email: email,
+			Account: serial.ToTypedMessage(&vmess.Account{
+				Id:      uuid,
+				AlterId: 0,
+			}),
+		}
+		op := serial.ToTypedMessage(&command.AddUserOperation{User: user})
+		_, err := a.client.AlterInbound(ctx, &command.AlterInboundRequest{
+			Tag:       inboundTagVMess,
+			Operation: op,
+		})
+		return err
 	})
-	return err
 }
 
 // AddVLESSUser adds a VLESS user.
 func (a *XrayAPI) AddVLESSUser(ctx context.Context, uuid, email string) error {
-	if a.client == nil {
-		return nil
-	}
-	user := &protocol.User{
-		Email: email,
-		Account: serial.ToTypedMessage(&vless.Account{
-			Id:         uuid,
-			Flow:       "xtls-rprx-vision",
-			Encryption: "none",
-		}),
-	}
-	op := serial.ToTypedMessage(&command.AddUserOperation{User: user})
-	_, err := a.client.AlterInbound(ctx, &command.AlterInboundRequest{
-		Tag:       inboundTagVLESS,
-		Operation: op,
+	return a.xrayRetry(ctx, "AddVLESSUser", func(ctx context.Context) error {
+		if a.client == nil {
+			return nil
+		}
+		user := &protocol.User{
+			Email: email,
+			Account: serial.ToTypedMessage(&vless.Account{
+				Id:         uuid,
+				Flow:       "xtls-rprx-vision",
+				Encryption: "none",
+			}),
+		}
+		op := serial.ToTypedMessage(&command.AddUserOperation{User: user})
+		_, err := a.client.AlterInbound(ctx, &command.AlterInboundRequest{
+			Tag:       inboundTagVLESS,
+			Operation: op,
+		})
+		return err
 	})
-	return err
 }
 
 // AddTrojanUser adds a Trojan user.
 func (a *XrayAPI) AddTrojanUser(ctx context.Context, password, email string) error {
-	if a.client == nil {
-		return nil
-	}
-	user := &protocol.User{
-		Email: email,
-		Account: serial.ToTypedMessage(&trojan.Account{
-			Password: password,
-		}),
-	}
-	op := serial.ToTypedMessage(&command.AddUserOperation{User: user})
-	_, err := a.client.AlterInbound(ctx, &command.AlterInboundRequest{
-		Tag:       inboundTagTrojan,
-		Operation: op,
+	return a.xrayRetry(ctx, "AddTrojanUser", func(ctx context.Context) error {
+		if a.client == nil {
+			return nil
+		}
+		user := &protocol.User{
+			Email: email,
+			Account: serial.ToTypedMessage(&trojan.Account{
+				Password: password,
+			}),
+		}
+		op := serial.ToTypedMessage(&command.AddUserOperation{User: user})
+		_, err := a.client.AlterInbound(ctx, &command.AlterInboundRequest{
+			Tag:       inboundTagTrojan,
+			Operation: op,
+		})
+		return err
 	})
-	return err
 }
 
 // RemoveUser removes a user by email from the given inbound.
 func (a *XrayAPI) RemoveUser(ctx context.Context, tag, email string) error {
-	if a.client == nil {
-		return nil
-	}
-	op := serial.ToTypedMessage(&command.RemoveUserOperation{Email: email})
-	_, err := a.client.AlterInbound(ctx, &command.AlterInboundRequest{
-		Tag:       tag,
-		Operation: op,
+	return a.xrayRetry(ctx, "RemoveUser", func(ctx context.Context) error {
+		if a.client == nil {
+			return nil
+		}
+		op := serial.ToTypedMessage(&command.RemoveUserOperation{Email: email})
+		_, err := a.client.AlterInbound(ctx, &command.AlterInboundRequest{
+			Tag:       tag,
+			Operation: op,
+		})
+		return err
 	})
-	return err
 }

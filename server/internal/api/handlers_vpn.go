@@ -61,6 +61,7 @@ func (h *vpnHandler) revoke(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
 	}
+	recordVPNConfigRevoked(protocol)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -89,6 +90,7 @@ func (h *vpnHandler) getConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "vpn_error", err.Error())
 		return
 	}
+	recordVPNConfigIssued(protocol)
 
 	format := r.URL.Query().Get("format")
 	if format == "json" {

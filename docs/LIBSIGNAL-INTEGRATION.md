@@ -18,11 +18,15 @@
 
 1. ✓ **Установлен** `@privacyresearch/libsignal-protocol-typescript`. Интеграция в `web/src/crypto/signal.ts`, `signal-store.ts`. При отправке — попытка Signal, при ошибке — fallback на MVP. При получении — асинхронная расшифровка sig1: сообщений.
 
-2. **Слой совместимости** — создать `web/src/crypto/signal.ts`:
+2. ✓ **Persistent store (IndexedDB)** — `IndexedDBSignalStore` в `signal-store.ts`. Сессии Signal сохраняются между перезагрузками страницы, Double Ratchet работает корректно.
+
+3. ✓ **Safety number (отпечаток ключа)** — `web/src/crypto/fingerprint.ts`. Кнопка «Отпечаток» в DM позволяет сравнить fingerprint с собеседником для проверки на MITM.
+
+4. **Слой совместимости** — создать `web/src/crypto/signal.ts`:
    - `convertBundle(our: PrekeyBundle): SignalPreKeyBundle`
    - `encryptWithSignal(plaintext, bundle, sessionStore): ciphertext`
    - `decryptWithSignal(ciphertext, ourKeys, sessionStore): plaintext`
-   - Session store: in-memory или IndexedDB
+   - Session store: IndexedDB (по умолчанию для max security)
 
 3. **Миграция** — по флагу или версии протокола:
    - Новые сессии — Signal

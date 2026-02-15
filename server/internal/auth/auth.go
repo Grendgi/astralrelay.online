@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/messenger/server/internal/db"
 	"github.com/messenger/server/internal/dbenc"
+	"github.com/messenger/server/internal/keydir"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -109,6 +110,9 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (userID string
 		return "", uuid.Nil, "", fmt.Errorf("insert device: %w", err)
 	}
 
+	if len(in.OneTimePrekeys) > keydir.MaxOneTimePrekeysPerDevice {
+		return "", uuid.Nil, "", fmt.Errorf("one-time prekeys: max %d per device", keydir.MaxOneTimePrekeysPerDevice)
+	}
 	for _, pk := range in.OneTimePrekeys {
 		pkStored := pk.Key
 		if s.enc != nil {
@@ -275,6 +279,9 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*LoginResult, error
 		)
 		if err != nil {
 			return nil, fmt.Errorf("add device: %w", err)
+		}
+		if len(in.OneTimePrekeys) > keydir.MaxOneTimePrekeysPerDevice {
+			return nil, fmt.Errorf("one-time prekeys: max %d per device", keydir.MaxOneTimePrekeysPerDevice)
 		}
 		for _, pk := range in.OneTimePrekeys {
 			pkStored := pk.Key

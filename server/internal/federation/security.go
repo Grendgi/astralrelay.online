@@ -1,16 +1,21 @@
 package federation
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 )
+
+const blocklistHTTPTimeout = 15 * time.Second
 
 const (
 	MaxBodySize     = 1 << 20  // 1MB
@@ -26,13 +31,14 @@ const (
 
 // SecurityConfig holds federation security settings.
 type SecurityConfig struct {
-	RateLimit       int    // requests per window per domain
-	MaxBodySize     int
-	AllowlistMode   string // auto, manual, open
-	AllowlistPath   string // file for allowlist (auto: append on first valid; manual: read)
-	BlocklistPath   string // local blocklist file
-	BlocklistURL    string // optional: fetch blocklist from URL
-	BlocklistReload time.Duration
+	RateLimit             int    // requests per window per domain
+	MaxBodySize           int
+	AllowlistMode         string // auto, manual, open
+	AllowlistPath         string // file for allowlist (auto: append on first valid; manual: read)
+	AllowlistTrustThreshold int  // auto mode: min successful transactions before adding (default 1)
+	BlocklistPath         string // local blocklist file
+	BlocklistURL          string // optional: fetch blocklist from URL
+	BlocklistReload       time.Duration
 }
 
 // DefaultSecurityConfig returns default values.
@@ -47,15 +53,24 @@ func DefaultSecurityConfig() SecurityConfig {
 
 // SecurityService manages blocklist, allowlist and validation.
 type SecurityService struct {
-	cfg       SecurityConfig
-	blocklist map[string]struct{}
-	allowlist map[string]struct{}
-	mu        sync.RWMutex
+	cfg            SecurityConfig
+	blocklist      map[string]struct{}
+	allowlist      map[string]struct{}
+	successCount   map[string]int // domain -> successful transaction count (auto mode)
+	mu             sync.RWMutex
 }
 
 // NewSecurityService creates a SecurityService and loads lists.
 func NewSecurityService(cfg SecurityConfig) *SecurityService {
-	s := &SecurityService{cfg: cfg, blocklist: make(map[string]struct{}), allowlist: make(map[string]struct{})}
+	s := &SecurityService{
+		cfg:          cfg,
+		blocklist:    make(map[string]struct{}),
+		allowlist:    make(map[string]struct{}),
+		successCount: make(map[string]int),
+	}
+	if s.cfg.AllowlistTrustThreshold < 1 {
+		s.cfg.AllowlistTrustThreshold = 1
+	}
 	s.loadBlocklist()
 	s.loadAllowlist()
 	if cfg.BlocklistURL != "" && cfg.BlocklistReload > 0 {
@@ -79,26 +94,53 @@ func (s *SecurityService) loadBlocklist() {
 			}
 		}
 	}
-	if s.cfg.BlocklistURL != "" {
-		resp, err := http.Get(s.cfg.BlocklistURL)
+	if s.cfg.BlocklistURL != "" && isBlocklistURLAllowed(s.cfg.BlocklistURL) {
+		ctx, cancel := context.WithTimeout(context.Background(), blocklistHTTPTimeout)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.cfg.BlocklistURL, nil)
 		if err == nil {
-			defer resp.Body.Close()
-			data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-			var list []string
-			if json.Unmarshal(data, &list) == nil {
-				for _, d := range list {
-					s.blocklist[strings.ToLower(strings.TrimSpace(d))] = struct{}{}
-				}
-			} else {
-				for _, line := range strings.Split(string(data), "\n") {
-					d := strings.TrimSpace(strings.ToLower(line))
-					if d != "" && !strings.HasPrefix(d, "#") {
-						s.blocklist[d] = struct{}{}
+			client := &http.Client{Timeout: blocklistHTTPTimeout}
+			resp, err := client.Do(req)
+			if err == nil {
+				defer resp.Body.Close()
+				data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+				var list []string
+				if json.Unmarshal(data, &list) == nil {
+					for _, d := range list {
+						s.blocklist[strings.ToLower(strings.TrimSpace(d))] = struct{}{}
+					}
+				} else {
+					for _, line := range strings.Split(string(data), "\n") {
+						d := strings.TrimSpace(strings.ToLower(line))
+						if d != "" && !strings.HasPrefix(d, "#") {
+							s.blocklist[d] = struct{}{}
+						}
 					}
 				}
 			}
 		}
 	}
+}
+
+// isBlocklistURLAllowed rejects file://, localhost, and private/internal addresses.
+func isBlocklistURLAllowed(rawURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" || host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *SecurityService) reloadBlocklistLoop() {
@@ -151,7 +193,22 @@ func (s *SecurityService) IsAllowed(domain string) bool {
 	return ok
 }
 
-// AddToAllowlist adds domain to allowlist and persists to file (auto mode).
+// RecordSuccessfulTransaction increments success count for domain (auto mode).
+// Returns true if domain should be added to allowlist (count >= threshold).
+func (s *SecurityService) RecordSuccessfulTransaction(domain string) (shouldAdd bool) {
+	if s.cfg.AllowlistMode != "auto" || s.IsAllowed(domain) {
+		return false
+	}
+	d := strings.ToLower(strings.TrimSpace(domain))
+	if d == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.successCount[d]++
+	return s.successCount[d] >= s.cfg.AllowlistTrustThreshold
+}
+
 // CheckAllowlistForTransaction returns nil if domain may proceed. For auto mode, adds domain on first valid call.
 func (s *SecurityService) CheckAllowlistForTransaction(domain string) error {
 	if s.cfg.AllowlistMode == "open" {

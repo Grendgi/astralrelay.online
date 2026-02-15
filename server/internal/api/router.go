@@ -1,11 +1,11 @@
 package api
 
 import (
-	"log"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/messenger/server/internal/logjson"
 	"github.com/go-chi/cors"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -146,7 +146,9 @@ func anonymityLogger(next http.Handler) http.Handler {
 		start := time.Now()
 		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 		next.ServeHTTP(ww, r)
-		log.Printf("%s %s %d %v", r.Method, r.URL.Path, ww.Status(), time.Since(start))
+		logjson.Log("api", map[string]interface{}{
+			"method": r.Method, "path": r.URL.Path, "status": ww.Status(), "duration_ms": time.Since(start).Milliseconds(),
+		})
 	})
 }
 

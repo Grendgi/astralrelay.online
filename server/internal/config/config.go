@@ -94,14 +94,15 @@ type FederationMTLSConfig struct {
 }
 
 type FederationSecurityConfig struct {
-	RateLimit       int    // per domain per minute
-	MaxBodySize     int    // bytes
-	AllowlistMode   string // auto, manual, open
-	AllowlistPath   string
-	BlocklistPath   string
-	BlocklistURL    string
-	BlocklistReload int    // hours
-	AlertWebhookURL string // optional: POST on rate limit / blocklist
+	RateLimit             int    // per domain per minute
+	MaxBodySize           int    // bytes
+	AllowlistMode         string // auto, manual, open
+	AllowlistPath         string
+	AllowlistTrustThreshold int  // auto mode: min successful transactions before add (default 1)
+	BlocklistPath         string
+	BlocklistURL          string
+	BlocklistReload       int    // hours
+	AlertWebhookURL       string // optional: POST on rate limit / blocklist
 }
 
 func Load() (*Config, error) {
@@ -146,14 +147,15 @@ func Load() (*Config, error) {
 				ClientKey:  getEnv("FEDERATION_MTLS_CLIENT_KEY", ""),
 			},
 			Security: FederationSecurityConfig{
-				RateLimit:       atoiEnv("FEDERATION_RATE_LIMIT", 100),
-				MaxBodySize:     atoiEnv("FEDERATION_MAX_BODY_SIZE", 1048576), // 1MB
-				AllowlistMode:   getEnv("FEDERATION_ALLOWLIST_MODE", "auto"),
-				AllowlistPath:   getEnv("FEDERATION_ALLOWLIST_PATH", ""),
-				BlocklistPath:   getEnv("FEDERATION_BLOCKLIST_PATH", ""),
-				BlocklistURL:    getEnv("FEDERATION_BLOCKLIST_URL", ""),
-				BlocklistReload: atoiEnv("FEDERATION_BLOCKLIST_RELOAD_HOURS", 6),
-				AlertWebhookURL: getEnv("FEDERATION_ALERT_WEBHOOK_URL", ""),
+				RateLimit:               atoiEnv("FEDERATION_RATE_LIMIT", 100),
+				MaxBodySize:             atoiEnv("FEDERATION_MAX_BODY_SIZE", 1048576), // 1MB
+				AllowlistMode:           getEnv("FEDERATION_ALLOWLIST_MODE", "auto"),
+				AllowlistPath:           getEnv("FEDERATION_ALLOWLIST_PATH", ""),
+				AllowlistTrustThreshold: atoiEnv("FEDERATION_ALLOWLIST_TRUST_THRESHOLD", 1),
+				BlocklistPath:           getEnv("FEDERATION_BLOCKLIST_PATH", ""),
+				BlocklistURL:            getEnv("FEDERATION_BLOCKLIST_URL", ""),
+				BlocklistReload:         atoiEnv("FEDERATION_BLOCKLIST_RELOAD_HOURS", 6),
+				AlertWebhookURL:         getEnv("FEDERATION_ALERT_WEBHOOK_URL", ""),
 			},
 		},
 		Push: PushConfig{

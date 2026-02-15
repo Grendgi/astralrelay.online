@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/messenger/server/internal/federation"
+	"github.com/messenger/server/internal/logjson"
 	"github.com/messenger/server/internal/keydir"
 	"github.com/messenger/server/internal/push"
 	"github.com/messenger/server/internal/relay"
@@ -54,7 +55,7 @@ func (h *keysHandler) getBundleForUser(w http.ResponseWriter, r *http.Request) {
 	}
 	bundle, deviceID, err := h.keydir.GetBundleForUser(r.Context(), userID)
 	if err == keydir.ErrNotFound || err == keydir.ErrInvalidUserID {
-		log.Printf("[keys] getBundleForUser userID=%q err=%v", userID, err)
+		logjson.Log("keys_get_bundle", map[string]interface{}{"user_id": userID, "error": err.Error()})
 		writeError(w, http.StatusNotFound, "not_found", "Bundle not found")
 		return
 	}
@@ -80,6 +81,9 @@ func (h *keysHandler) writeBundle(w http.ResponseWriter, bundle *keydir.Bundle, 
 	}
 	if deviceID != "" {
 		resp["device_id"] = deviceID
+		if dev, err := uuid.Parse(deviceID); err == nil {
+			resp["signal_device_id"] = keydir.UUIDToSignalDeviceID(dev)
+		}
 	}
 	if bundle.OneTimePrekey != nil {
 		resp["one_time_prekey"] = map[string]interface{}{
@@ -92,7 +96,8 @@ func (h *keysHandler) writeBundle(w http.ResponseWriter, bundle *keydir.Bundle, 
 
 func (h *keysHandler) updateKeys(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		SignedPrekey *struct {
+		IdentitySigningKey string `json:"identity_signing_key"` // Ed25519 public, base64 — для проверки signed_prekey
+		SignedPrekey       *struct {
 			Key       string `json:"key"`
 			Signature string `json:"signature"`
 			KeyID     int64  `json:"key_id"`
@@ -136,10 +141,22 @@ func (h *keysHandler) updateKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var spkSlice, spkSigSlice []byte
+	var identitySigningKey []byte
+	if req.IdentitySigningKey != "" {
+		identitySigningKey, _ = base64.StdEncoding.DecodeString(req.IdentitySigningKey)
+	}
 	if req.SignedPrekey != nil {
 		spkSlice, spkSigSlice = spk, spkSig
 	}
-	err = h.keydir.UpdateKeys(r.Context(), userID, deviceID, spkSlice, spkSigSlice, spkID, oneTimePrekeys)
+	err = h.keydir.UpdateKeys(r.Context(), userID, deviceID, spkSlice, spkSigSlice, spkID, oneTimePrekeys, identitySigningKey)
+	if err == keydir.ErrInvalidSignature {
+		writeError(w, http.StatusBadRequest, "invalid_request", "signed prekey signature invalid")
+		return
+	}
+	if err == keydir.ErrPrekeyQuotaExceeded {
+		writeError(w, http.StatusBadRequest, "invalid_request", "one-time prekeys quota exceeded (max 500 per device)")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
@@ -406,26 +423,28 @@ func (h *relayHandler) sync(w http.ResponseWriter, r *http.Request) {
 
 	// Convert to API response format
 	type eventResp struct {
-		EventID    string `json:"event_id"`
-		Type       string `json:"type"`
-		Sender     string `json:"sender"`
-		Recipient  string `json:"recipient"`
-		Timestamp  int64  `json:"timestamp"`
-		Ciphertext string `json:"ciphertext"`
-		SessionID  string `json:"session_id"`
-		Status     string `json:"status,omitempty"`
+		EventID      string `json:"event_id"`
+		Type         string `json:"type"`
+		Sender       string `json:"sender"`
+		Recipient    string `json:"recipient"`
+		SenderDevice string `json:"sender_device,omitempty"`
+		Timestamp    int64  `json:"timestamp"`
+		Ciphertext   string `json:"ciphertext"`
+		SessionID    string `json:"session_id"`
+		Status       string `json:"status,omitempty"`
 	}
 	respEvents := make([]eventResp, len(events))
 	for i, e := range events {
 		respEvents[i] = eventResp{
-			EventID:    e.EventID,
-			Type:       e.Type,
-			Sender:     e.Sender,
-			Recipient:  e.Recipient,
-			Timestamp:  e.Timestamp,
-			Ciphertext: base64.StdEncoding.EncodeToString(e.Ciphertext),
-			SessionID:  e.SessionID,
-			Status:     e.Status,
+			EventID:      e.EventID,
+			Type:         e.Type,
+			Sender:       e.Sender,
+			Recipient:    e.Recipient,
+			SenderDevice: e.SenderDevice,
+			Timestamp:    e.Timestamp,
+			Ciphertext:   base64.StdEncoding.EncodeToString(e.Ciphertext),
+			SessionID:    e.SessionID,
+			Status:       e.Status,
 		}
 	}
 

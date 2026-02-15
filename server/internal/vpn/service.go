@@ -148,19 +148,30 @@ func (s *Service) getWireGuardConfig(ctx context.Context, userID int64, deviceID
 		return "", "", err
 	}
 
-	var clientAddr string
-	var usedAddrs []string
-	rows, _ := s.db.Pool.Query(ctx, `SELECT client_address FROM vpn_peers WHERE protocol = 'wireguard' AND client_address IS NOT NULL`)
-	if rows != nil {
-		for rows.Next() {
-			var a string
-			if rows.Scan(&a) == nil && a != "" {
-				usedAddrs = append(usedAddrs, a)
-			}
-		}
-		rows.Close()
+	var oldPubkey string
+	_ = s.db.Pool.QueryRow(ctx,
+		`SELECT client_pubkey FROM vpn_peers WHERE user_id = $1 AND device_id = $2 AND protocol = 'wireguard'`,
+		userID, deviceID,
+	).Scan(&oldPubkey)
+	if oldPubkey != "" && oldPubkey != clientPubKey {
+		s.RemoveWGPeer(ctx, oldPubkey)
 	}
-	clientAddr = NextClientAddress(usedAddrs)
+
+	var clientAddr string
+	var existingAddr string
+	if err := s.db.Pool.QueryRow(ctx,
+		`SELECT COALESCE(client_address::text, '') FROM vpn_peers WHERE user_id = $1 AND device_id = $2 AND protocol = 'wireguard'`,
+		userID, deviceID,
+	).Scan(&existingAddr); err == nil && existingAddr != "" {
+		clientAddr = existingAddr
+	} else {
+		var n int
+		if err := s.db.Pool.QueryRow(ctx, `SELECT nextval('vpn_wg_addr_seq')::int`).Scan(&n); err != nil {
+			return "", "", fmt.Errorf("vpn address pool exhausted: %w", err)
+		}
+		clientAddr = fmt.Sprintf("10.66.66.%d/32", n)
+	}
+
 	expiryDays := s.getDefaultExpiryDays(ctx)
 	expiresAt := time.Now().AddDate(0, 0, expiryDays)
 	trafficLimit := s.getDefaultTrafficLimitBytes(ctx)
@@ -170,8 +181,8 @@ func (s *Service) getWireGuardConfig(ctx context.Context, userID int64, deviceID
 		nodeID = &node.ID
 	}
 	_, err = s.db.Pool.Exec(ctx,
-		`INSERT INTO vpn_peers (user_id, device_id, protocol, client_pubkey, client_address, expires_at, traffic_limit_bytes, node_id) VALUES ($1, $2, 'wireguard', $3, $4, $5, $6, $7)
-		 ON CONFLICT (user_id, device_id, protocol) DO UPDATE SET client_pubkey = $3, client_address = $4, expires_at = $5, traffic_limit_bytes = $6, node_id = $7, created_at = NOW()`,
+		`INSERT INTO vpn_peers (user_id, device_id, protocol, client_pubkey, client_address, expires_at, traffic_limit_bytes, node_id) VALUES ($1, $2, 'wireguard', $3, $4::inet, $5, $6, $7)
+		 ON CONFLICT (user_id, device_id, protocol) DO UPDATE SET client_pubkey = EXCLUDED.client_pubkey, client_address = COALESCE(vpn_peers.client_address, EXCLUDED.client_address), expires_at = EXCLUDED.expires_at, traffic_limit_bytes = EXCLUDED.traffic_limit_bytes, node_id = EXCLUDED.node_id, created_at = NOW()`,
 		userID, deviceID, clientPubKey, clientAddr, expiresAt, trafficLimit, nodeID,
 	)
 	if err != nil {

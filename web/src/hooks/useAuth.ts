@@ -24,6 +24,7 @@ export interface AuthUser {
 export interface StoredKeys {
   identityKey: string
   identitySecret: string
+  identitySigningKey?: string
   signedPrekey: { key: string; signature: string; secret: string }
   oneTimePrekeys: string[]
 }
@@ -85,6 +86,7 @@ export function useAuth() {
       localStorage.setItem('keys', JSON.stringify({
         identityKey: keys.identityKey,
         identitySecret: keys.identitySecret,
+        identitySigningKey: keys.identitySigningKey,
         signedPrekey: keys.signedPrekey,
         oneTimePrekeys: keys.oneTimePrekeys,
       }))
@@ -138,6 +140,7 @@ export function useAuth() {
           localStorage.setItem('keys', JSON.stringify({
             identityKey: restored.identityKey,
             identitySecret: restored.identitySecret,
+            identitySigningKey: restored.identitySigningKey,
             signedPrekey: restored.signedPrekey,
             oneTimePrekeys: restored.oneTimePrekeys ?? [],
           }))
