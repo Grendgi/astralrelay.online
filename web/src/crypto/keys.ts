@@ -27,6 +27,7 @@ export async function generateKeys() {
       key: encodeBase64(signedPrekeyPair.publicKey),
       signature: encodeBase64(signature),
       secret: encodeBase64(signedPrekeyPair.secretKey),
+      key_id: 1,
     },
     oneTimePrekeys,
   }

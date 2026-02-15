@@ -102,7 +102,7 @@ export class InMemorySignalStore {
 
   async getLocalRegistrationId(): Promise<number> {
     const rid = this.get('registrationId')
-    return typeof rid === 'number' ? rid : 0x1234
+    return typeof rid === 'number' ? rid : 0
   }
 
   async isTrustedIdentity(): Promise<boolean> {
@@ -197,7 +197,7 @@ export class IndexedDBSignalStore {
 
   async getLocalRegistrationId(): Promise<number> {
     const rid = await this.get('registrationId')
-    return typeof rid === 'number' ? rid : 0x1234
+    return typeof rid === 'number' ? rid : 0
   }
 
   async isTrustedIdentity(): Promise<boolean> {

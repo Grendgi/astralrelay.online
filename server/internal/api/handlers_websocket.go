@@ -20,15 +20,12 @@ type streamHandler struct {
 }
 
 func (h *streamHandler) serveWs(w http.ResponseWriter, r *http.Request) {
-	token := extractToken(r)
-	if token == "" {
-		token = r.URL.Query().Get("access_token")
-	}
-	if token == "" {
-		writeError(w, http.StatusUnauthorized, "missing_token", "Authorization required")
+	wsToken := r.URL.Query().Get("ws_token")
+	if wsToken == "" {
+		writeError(w, http.StatusUnauthorized, "missing_token", "ws_token required")
 		return
 	}
-	userID, _, err := h.auth.ValidateToken(r.Context(), token)
+	userID, _, err := h.auth.ValidateWSToken(wsToken)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid_token", "Invalid token")
 		return

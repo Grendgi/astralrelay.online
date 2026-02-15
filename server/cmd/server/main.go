@@ -66,8 +66,17 @@ func main() {
 		}
 	}
 
-	// JWT secret - in prod use env var
-	jwtSecret := []byte(os.Getenv("JWT_SECRET"))
+	// JWT secret: fail-fast in production if missing
+	jwtSecretStr := os.Getenv("JWT_SECRET")
+	env := os.Getenv("ENV")
+	if env == "" {
+		env = os.Getenv("APP_ENV")
+	}
+	isProd := env == "production" || env == "prod"
+	if isProd && (jwtSecretStr == "" || len(jwtSecretStr) < 16) {
+		log.Fatalf("JWT_SECRET required and must be at least 16 bytes in production (ENV=%s)", env)
+	}
+	jwtSecret := []byte(jwtSecretStr)
 	if len(jwtSecret) == 0 {
 		jwtSecret = []byte("dev-secret-change-in-production")
 	}

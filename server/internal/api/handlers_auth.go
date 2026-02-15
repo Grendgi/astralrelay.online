@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/messenger/server/internal/auth"
@@ -169,4 +170,46 @@ func (h *authHandler) login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *authHandler) wsToken(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r.Context())
+	deviceIDStr := getDeviceID(r.Context())
+	if userID == 0 || deviceIDStr == "" {
+		writeError(w, http.StatusUnauthorized, "missing_context", "Auth context required")
+		return
+	}
+	deviceID, err := uuid.Parse(deviceIDStr)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Invalid device")
+		return
+	}
+	wsToken, err := h.auth.IssueWSToken(userID, deviceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ws_token":   wsToken,
+		"expires_in": auth.WSTokenExpirySec(),
+	})
+}
+
+func (h *authHandler) logout(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	token = strings.TrimSpace(token)
+	if token == "" {
+		writeError(w, http.StatusUnauthorized, "missing_token", "Authorization required")
+		return
+	}
+	err := h.auth.RevokeToken(r.Context(), token)
+	if err == auth.ErrInvalidToken {
+		writeError(w, http.StatusUnauthorized, "invalid_token", "Invalid or expired token")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok"})
 }

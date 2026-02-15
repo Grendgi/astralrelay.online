@@ -38,8 +38,8 @@ ensure_docker() {
     fi
   else
     echo "Docker не найден. Установите: curl -fsSL https://get.docker.com | sh"
-    exit 1
-  fi
+  exit 1
+fi
 }
 
 echo ""

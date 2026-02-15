@@ -57,6 +57,24 @@
 - Не логировать пароли, токены, содержимое сообщений
 - Логировать только метаданные (IP, путь, статус) при необходимости расследования
 
+### 6. Traefik: query string не в access logs
+
+WebSocket использует `ws_token` в query (`/messages/stream?ws_token=...`). Чтобы токен не попал в логи:
+
+**Вариант A (рекомендуется):** не включать access logs. По умолчанию при отсутствии секции `accessLog` в traefik.yml access logs могут не писаться.
+
+**Вариант B:** если нужны access logs — исключить поле с query:
+
+```yaml
+accessLog:
+  format: json
+  fields:
+    names:
+      RequestPath: drop   # путь+query — не логируем (содержит ws_token)
+```
+
+**Вариант C:** для роута `/api/v1/messages/stream` отключить логи через `observability.accessLogs=false` в динамической конфигурации (требует отдельного роутера).
+
 ## Чеклист перед продакшеном
 
 - [ ] JWT_SECRET, пароли БД и MinIO — сгенерированы и уникальны

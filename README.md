@@ -16,7 +16,7 @@
 
 | Возможность | Описание |
 |-------------|----------|
-| 🔐 **E2EE** | End-to-end шифрование (Signal Protocol + fallback MVP); persistent store (IndexedDB), Safety number для проверки MITM |
+| 🔐 **E2EE** | **Signal Protocol** (если доступен) + **fallback MVP**; persistent store (IndexedDB), safety number для MITM. Личные DM — Signal/MVP, федерация — передача ciphertext |
 | 🌐 **Федерация** | Децентрализованная сеть: главный хаб + self-host узлы, обмен сообщениями между доменами |
 | 🔒 **VPN** | Xray (VLESS, VMess, Trojan) — пользователь скачивает конфиг в один клик |
 | 📱 **Push** | Web Push уведомления (VAPID) |
@@ -33,7 +33,7 @@
 curl -fsSL https://raw.githubusercontent.com/Grendgi/astralrelay.online/main/bootstrap.sh | sudo sh
 ```
 
-Docker, секреты, IP→nip.io, VAPID — всё автоматически. Без вопросов.
+Docker, секреты, IP→nip.io, VAPID — всё автоматически. Без вопросов. Для фиксации версии: `BRANCH=v0.3.1` или `EXPECTED_SHA256=...`.
 
 ---
 
@@ -100,7 +100,7 @@ INSTALL_AUTO=1 INSTALL_MODE=selfhost sudo ./install.sh
 |-----------|------|
 | **Backend** | Go 1.23, Chi, JWT, PostgreSQL, Redis |
 | **Frontend** | React 18, TypeScript, Vite |
-| **E2EE** | X3DH, Double Ratchet, NaCl |
+| **E2EE** | Signal Protocol (X3DH + Double Ratchet) или MVP (X25519 + NaCl) |
 | **VPN** | Xray-core (VLESS, VMess, Trojan) |
 | **Инфра** | Docker, Traefik, Let's Encrypt |
 
@@ -116,6 +116,8 @@ INSTALL_AUTO=1 INSTALL_MODE=selfhost sudo ./install.sh
 | [Subdomain главного](docs/SUBDOMAIN-MODE.md) | 1-2-3-4.astralrelay.online |
 | [Self-Hosting обзор](docs/SELF-HOSTING.md) | Роли, nip.io, HA, федерация |
 | [Защита федерации](docs/FEDERATION-SECURITY.md) | Rate limit, blocklist, mTLS, webhook-алерты |
+| [E2EE: Signal vs MVP](docs/E2EE.md) | Режимы шифрования, проверка Signal, IndexedDB |
+| [Усиление безопасности](docs/SECURITY-HARDENING.md) | JWT (iss/aud/typ, HS256), ws_token, ревокация, Traefik |
 | [WAF](docs/WAF.md) | Traefik/CrowdSec/ModSecurity |
 | [Dev-режим](docs/RUN-DEV.md) | Локальная разработка |
 | [Архитектура](docs/architecture.md) | Схема, компоненты, потоки |
@@ -135,7 +137,7 @@ astralrelay.online/
 ├── web/                # React frontend
 ├── xray/               # Xray VPN конфигурация
 ├── mesh/               # Coordinator, backup-receiver (Go)
-├── scripts/            # setup-mesh, backup-to-peers, smoke-test, clean-rebuild
+├── scripts/            # setup-mesh, backup-to-peers, smoke-test, clean-rebuild, fmt, lint
 ├── install.sh          # Универсальная установка (main/selfhost)
 ├── install-selfhost.sh # Только self-host
 └── docs/               # Документация
@@ -155,9 +157,11 @@ sudo ./deploy/setup-server.sh
 # Self-host
 ./deploy/selfhost/run.sh
 
-# Dev
-./deploy/dev/run.sh
+# Dev (Makefile)
+make dev
 ```
+
+Или напрямую: `./deploy/dev/run.sh`. Полезные команды: `make fmt`, `make lint`, `make migrate`, `make build`, `make clean`.
 
 ---
 

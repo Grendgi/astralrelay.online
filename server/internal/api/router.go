@@ -94,8 +94,13 @@ func NewRouter(
 		r.With(LimitByIP(10, time.Minute)).Post("/auth/login", authH.login)
 
 		// Protected
+		// WebSocket: ws_token only (no access_token in URL)
+		r.Get("/messages/stream", streamH.serveWs)
+
 		r.Group(func(r chi.Router) {
 			r.Use(AuthMiddleware(authSvc))
+			r.Post("/auth/ws-token", authH.wsToken)
+			r.Post("/auth/logout", authH.logout)
 			r.Put("/auth/keys", keysH.updateKeys)
 			r.Get("/keys/bundle/{userID}", keysH.getBundleForUser)
 			r.Get("/keys/bundle/{userID}/{deviceID}", keysH.getBundle)
@@ -103,7 +108,6 @@ func NewRouter(
 			r.Post("/messages/typing", relayH.typing)
 			r.Post("/messages/read", relayH.read)
 			r.Get("/messages/sync", relayH.sync)
-			r.Get("/messages/stream", streamH.serveWs)
 			r.Post("/rooms", roomsH.create)
 			r.Get("/rooms", roomsH.list)
 			r.Get("/rooms/{roomID}", roomsH.get)

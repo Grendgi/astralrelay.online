@@ -57,6 +57,18 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  logout: (token: string) =>
+    request<{ status: string }>('/auth/logout', {
+      method: 'POST',
+      token,
+    }),
+
+  getWSToken: (token: string) =>
+    request<{ ws_token: string; expires_in: number }>('/auth/ws-token', {
+      method: 'POST',
+      token,
+    }),
+
   updateKeys: (body: { identity_signing_key?: string; signed_prekey?: { key: string; signature: string; key_id: number }; one_time_prekeys?: Array<{ key: string; key_id: number }> }, token: string) =>
     request<Record<string, never>>('/auth/keys', {
       method: 'PUT',
@@ -252,30 +264,39 @@ export const api = {
     onConnectionChange?: (connected: boolean) => void,
   ) => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const url = `${protocol}//${window.location.host}${API_BASE}/messages/stream?as=${encodeURIComponent(recipient)}&access_token=${encodeURIComponent(token)}`
     let ws: WebSocket
     let retries = 0
     const maxRetries = 5
     let stopped = false
     const connect = () => {
       if (stopped) return
-      ws = new WebSocket(url)
-      ws.onopen = () => {
-        retries = 0
-        onConnectionChange?.(true)
-      }
-      ws.onmessage = (e) => {
-        try {
-          const d = JSON.parse(e.data as string) as { type?: string; sender?: string; typing?: boolean; event_id?: string }
-          onMessage(d)
-        } catch {
-          onMessage()
-        }
-      }
-      ws.onclose = () => {
-        onConnectionChange?.(false)
-        if (!stopped && retries < maxRetries) setTimeout(connect, 2000 * ++retries)
-      }
+      api.getWSToken(token).then(
+        (res) => {
+          if (stopped) return
+          const url = `${protocol}//${window.location.host}${API_BASE}/messages/stream?as=${encodeURIComponent(recipient)}&ws_token=${encodeURIComponent(res.ws_token)}`
+          ws = new WebSocket(url)
+          ws.onopen = () => {
+            retries = 0
+            onConnectionChange?.(true)
+          }
+          ws.onmessage = (e) => {
+            try {
+              const d = JSON.parse(e.data as string) as { type?: string; sender?: string; typing?: boolean; event_id?: string }
+              onMessage(d)
+            } catch {
+              onMessage()
+            }
+          }
+          ws.onclose = () => {
+            onConnectionChange?.(false)
+            if (!stopped && retries < maxRetries) setTimeout(connect, 2000 * ++retries)
+          }
+        },
+        () => {
+          onConnectionChange?.(false)
+          if (!stopped && retries < maxRetries) setTimeout(connect, 2000 * ++retries)
+        },
+      )
     }
     connect()
     return () => { stopped = true; ws?.close() }

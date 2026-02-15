@@ -1,5 +1,7 @@
 # Traefik — шаблон (email подставляется из LETSENCRYPT_EMAIL)
 # Генерация: envsubst < traefik.yml.tpl > traefik.yml
+#
+# Access logs: по умолчанию отключены. Если включить — RequestPath: drop (см. docs/SECURITY-HARDENING.md)
 
 api:
   dashboard: true

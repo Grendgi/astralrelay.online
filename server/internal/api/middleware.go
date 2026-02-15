@@ -36,10 +36,7 @@ func extractToken(r *http.Request) string {
 	if strings.HasPrefix(h, "Bearer ") {
 		return strings.TrimPrefix(h, "Bearer ")
 	}
-	// WebSocket upgrade requests can't set Authorization header; token in query
-	if q := r.URL.Query().Get("access_token"); q != "" {
-		return q
-	}
+	// WebSocket uses ws_token from /auth/ws-token, not access_token
 	return ""
 }
 

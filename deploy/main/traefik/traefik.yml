@@ -1,5 +1,8 @@
 # Traefik — статическая конфигурация
 # HTTP :80, HTTPS :443 (сертификат Let's Encrypt при заданном LETSENCRYPT_EMAIL в .env)
+#
+# Access logs: по умолчанию отключены. Если включить — не логировать RequestPath (содержит ws_token в query).
+# См. docs/SECURITY-HARDENING.md
 
 api:
   dashboard: true

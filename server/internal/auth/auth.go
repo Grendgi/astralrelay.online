@@ -16,6 +16,7 @@ import (
 )
 
 const tokenExpiryHours = 24
+const wsTokenExpirySec = 60
 
 type Service struct {
 	db     *db.DB
@@ -138,7 +139,7 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (userID string
 		_ = s.StoreKeyBackup(ctx, uid, in.KeysBackupSalt, in.KeysBackupBlob)
 	}
 
-	tok, err := s.issueToken(uid, in.DeviceID)
+	tok, jti, err := s.issueToken(uid, in.DeviceID)
 	if err != nil {
 		return userID, in.DeviceID, "", err
 	}
@@ -152,26 +153,39 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (userID string
 		}
 	}
 	_, _ = s.db.Pool.Exec(ctx,
-		`INSERT INTO access_tokens (user_id, device_id, token_hash, expires_at)
-		 VALUES ($1, $2, $3, NOW() + INTERVAL '24 hours')`,
-		uid, in.DeviceID, thStored,
+		`INSERT INTO access_tokens (user_id, device_id, token_hash, jti, expires_at)
+		 VALUES ($1, $2, $3, $4, NOW() + INTERVAL '24 hours')`,
+		uid, in.DeviceID, thStored, jti,
 	)
 
 	return userID, in.DeviceID, tok, nil
 }
 
-func (s *Service) issueToken(userID int64, deviceID uuid.UUID) (string, error) {
+const tokenAudience = "api"
+
+func (s *Service) issueToken(userID int64, deviceID uuid.UUID) (string, uuid.UUID, error) {
+	jti := uuid.New()
 	claims := jwt.MapClaims{
 		"user_id":   userID,
 		"device_id": deviceID.String(),
+		"jti":       jti.String(),
+		"typ":       "access",
+		"iss":       s.domain,
+		"aud":       tokenAudience,
 		"exp":       jwt.NewNumericDate(time.Now().Add(tokenExpiryHours * time.Hour)),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(s.jwt)
+	signed, err := token.SignedString(s.jwt)
+	if err != nil {
+		return "", uuid.Nil, err
+	}
+	return signed, jti, nil
 }
 
+var jwtParser = jwt.NewParser(jwt.WithValidMethods([]string{"HS256"}))
+
 func (s *Service) ValidateToken(ctx context.Context, tokenString string) (userID int64, deviceID uuid.UUID, err error) {
-	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
+	token, err := jwtParser.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
 		return s.jwt, nil
 	})
 	if err != nil {
@@ -179,6 +193,31 @@ func (s *Service) ValidateToken(ctx context.Context, tokenString string) (userID
 	}
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok || !token.Valid {
+		return 0, uuid.Nil, ErrInvalidToken
+	}
+	jtiStr, _ := claims["jti"].(string)
+	if jtiStr == "" {
+		return 0, uuid.Nil, ErrInvalidToken // legacy tokens without jti are rejected
+	}
+	jti, err := uuid.Parse(jtiStr)
+	if err != nil {
+		return 0, uuid.Nil, ErrInvalidToken
+	}
+	var exists bool
+	err = s.db.Pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM access_tokens WHERE jti = $1 AND revoked_at IS NULL AND expires_at > NOW())`,
+		jti,
+	).Scan(&exists)
+	if err != nil || !exists {
+		return 0, uuid.Nil, ErrInvalidToken
+	}
+	if typ, _ := claims["typ"].(string); typ != "" && typ != "access" {
+		return 0, uuid.Nil, ErrInvalidToken
+	}
+	if iss, _ := claims["iss"].(string); iss != "" && iss != s.domain {
+		return 0, uuid.Nil, ErrInvalidToken
+	}
+	if aud, _ := claims["aud"].(string); aud != "" && aud != tokenAudience {
 		return 0, uuid.Nil, ErrInvalidToken
 	}
 	uid, _ := claims["user_id"].(float64)
@@ -298,7 +337,7 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*LoginResult, error
 		}
 	}
 
-	tok, err := s.issueToken(uid, in.DeviceID)
+	tok, jti, err := s.issueToken(uid, in.DeviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -312,9 +351,9 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*LoginResult, error
 		}
 	}
 	_, _ = s.db.Pool.Exec(ctx,
-		`INSERT INTO access_tokens (user_id, device_id, token_hash, expires_at)
-		 VALUES ($1, $2, $3, NOW() + INTERVAL '24 hours')`,
-		uid, in.DeviceID, thStored,
+		`INSERT INTO access_tokens (user_id, device_id, token_hash, jti, expires_at)
+		 VALUES ($1, $2, $3, $4, NOW() + INTERVAL '24 hours')`,
+		uid, in.DeviceID, thStored, jti,
 	)
 
 	res := &LoginResult{UserID: userID, DeviceID: in.DeviceID, Token: tok}
@@ -324,6 +363,81 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*LoginResult, error
 		}
 	}
 	return res, nil
+}
+
+// IssueWSToken returns a short-lived JWT for WebSocket auth (typ=ws, 60s).
+func (s *Service) IssueWSToken(userID int64, deviceID uuid.UUID) (string, error) {
+	claims := jwt.MapClaims{
+		"user_id":   userID,
+		"device_id": deviceID.String(),
+		"typ":       "ws",
+		"iss":       s.domain,
+		"aud":       tokenAudience,
+		"exp":       jwt.NewNumericDate(time.Now().Add(wsTokenExpirySec * time.Second)),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(s.jwt)
+}
+
+// WSTokenExpirySec returns the ws_token TTL for API response.
+func WSTokenExpirySec() int { return wsTokenExpirySec }
+
+// ValidateWSToken validates a WebSocket token (typ=ws). No DB check — short TTL is sufficient.
+func (s *Service) ValidateWSToken(tokenString string) (userID int64, deviceID uuid.UUID, err error) {
+	token, err := jwtParser.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
+		return s.jwt, nil
+	})
+	if err != nil {
+		return 0, uuid.Nil, ErrInvalidToken
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok || !token.Valid {
+		return 0, uuid.Nil, ErrInvalidToken
+	}
+	if typ, _ := claims["typ"].(string); typ != "ws" {
+		return 0, uuid.Nil, ErrInvalidToken
+	}
+	if iss, _ := claims["iss"].(string); iss != "" && iss != s.domain {
+		return 0, uuid.Nil, ErrInvalidToken
+	}
+	if aud, _ := claims["aud"].(string); aud != "" && aud != tokenAudience {
+		return 0, uuid.Nil, ErrInvalidToken
+	}
+	uid, _ := claims["user_id"].(float64)
+	did, _ := claims["device_id"].(string)
+	d, _ := uuid.Parse(did)
+	return int64(uid), d, nil
+}
+
+// RevokeToken marks the token as revoked.
+func (s *Service) RevokeToken(ctx context.Context, tokenString string) error {
+	userID, _, err := s.ValidateToken(ctx, tokenString)
+	if err != nil {
+		return err
+	}
+	token, err := jwtParser.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
+		return s.jwt, nil
+	})
+	if err != nil {
+		return ErrInvalidToken
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return ErrInvalidToken
+	}
+	jtiStr, _ := claims["jti"].(string)
+	if jtiStr == "" {
+		return ErrInvalidToken
+	}
+	jti, err := uuid.Parse(jtiStr)
+	if err != nil {
+		return ErrInvalidToken
+	}
+	_, err = s.db.Pool.Exec(ctx,
+		`UPDATE access_tokens SET revoked_at = NOW() WHERE jti = $1 AND user_id = $2 AND revoked_at IS NULL`,
+		jti, userID,
+	)
+	return err
 }
 
 // ErrUsernameTaken ...
@@ -401,6 +515,12 @@ func (s *Service) GetKeyBackup(ctx context.Context, userID int64) (salt []byte, 
 			return nil, nil, fmt.Errorf("decrypt salt: %w", err)
 		}
 		if encryptedBundle, err = s.enc.Decrypt(encryptedBundle); err != nil {
+			return nil, nil, fmt.Errorf("decrypt bundle: %w", err)
+		}
+	}
+	return salt, encryptedBundle, nil
+}
+le); err != nil {
 			return nil, nil, fmt.Errorf("decrypt bundle: %w", err)
 		}
 	}

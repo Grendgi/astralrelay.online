@@ -916,7 +916,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
           const bundle = await api.getKeys(r, token)
           const ourKeys = { identityKey: keys.identityKey, identitySecret: keys.identitySecret, signedPrekey: keys.signedPrekey }
           const ctRecipient = await signalEncrypt(payload, bundle, ourKeys, r).catch(() => encrypt(payload, bundle))
-          const selfBundle = { identity_key: keys.identityKey, signed_prekey: { key: keys.signedPrekey.key, signature: keys.signedPrekey.signature, key_id: 1 } }
+          const selfBundle = { identity_key: keys.identityKey, signed_prekey: { key: keys.signedPrekey.key, signature: keys.signedPrekey.signature, key_id: keys.signedPrekey.key_id ?? 1 } }
           const ctSelf = await signalEncrypt(payload, selfBundle, ourKeys, user.user_id, uuidToSignalDeviceId(user.device_id)).catch(() => encrypt(payload, selfBundle))
           content = { ciphertexts: { [r]: ctRecipient, [user.user_id]: ctSelf }, session_id: 'sess_mvp' }
         } catch (e) {
@@ -990,7 +990,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
           const bundle = await api.getKeys(r, token)
           const ourKeys = { identityKey: keys.identityKey, identitySecret: keys.identitySecret, signedPrekey: keys.signedPrekey }
           const ctRecipient = await signalEncrypt(plaintext, bundle, ourKeys, r).catch(() => encrypt(plaintext, bundle))
-          const selfBundle = { identity_key: keys.identityKey, signed_prekey: { key: keys.signedPrekey.key, signature: keys.signedPrekey.signature, key_id: 1 } }
+          const selfBundle = { identity_key: keys.identityKey, signed_prekey: { key: keys.signedPrekey.key, signature: keys.signedPrekey.signature, key_id: keys.signedPrekey.key_id ?? 1 } }
           const ctSelf = await signalEncrypt(plaintext, selfBundle, ourKeys, user.user_id, uuidToSignalDeviceId(user.device_id)).catch(() => encrypt(plaintext, selfBundle))
           content = { ciphertexts: { [r]: ctRecipient, [user.user_id]: ctSelf }, session_id: 'sess_mvp' }
         } catch (e) {

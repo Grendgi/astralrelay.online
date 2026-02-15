@@ -22,7 +22,7 @@ function bufToB64(buf: ArrayBuffer): string {
 export interface StoredKeys {
   identityKey: string
   identitySecret: string
-  signedPrekey: { key: string; signature: string; secret: string }
+  signedPrekey: { key: string; signature: string; secret: string; key_id?: number }
 }
 
 /** Derive Signal device ID from backend device UUID. Must match server's UUIDToSignalDeviceID. */
@@ -72,6 +72,15 @@ function bundleToDeviceType(
 
 import { IndexedDBSignalStore } from './signal-store'
 
+/** Get or create persistent registrationId (uint16). Never overwrite existing. */
+async function getOrCreateRegistrationId(store: IndexedDBSignalStore): Promise<number> {
+  const existing = await store.getLocalRegistrationId()
+  if (existing > 0 && existing <= 0xffff && existing !== 0x1234) return existing
+  const rid = Math.floor(Math.random() * 0xffff) + 1
+  await store.storeLocalRegistrationId(rid)
+  return rid
+}
+
 /** Populate persistent store with our keys. */
 async function initStore(store: IndexedDBSignalStore, keys: StoredKeys): Promise<void> {
   const identityKeyPair = {
@@ -79,13 +88,14 @@ async function initStore(store: IndexedDBSignalStore, keys: StoredKeys): Promise
     privKey: b64ToBuf(keys.identitySecret),
   }
   await store.storeIdentityKeyPair(identityKeyPair)
-  await store.storeLocalRegistrationId(0x1234)
+  await getOrCreateRegistrationId(store)
 
   const signedPreKeyPair = {
     pubKey: b64ToBuf(keys.signedPrekey.key),
     privKey: b64ToBuf(keys.signedPrekey.secret),
   }
-  await store.storeSignedPreKey(1, signedPreKeyPair)
+  const spkId = keys.signedPrekey.key_id ?? 1
+  await store.storeSignedPreKey(spkId, signedPreKeyPair)
 }
 
 /**

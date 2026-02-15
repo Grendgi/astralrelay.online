@@ -71,7 +71,7 @@ export function useAuth() {
           signed_prekey: {
             key: keys.signedPrekey.key,
             signature: keys.signedPrekey.signature,
-            key_id: 1,
+            key_id: keys.signedPrekey.key_id ?? 1,
           },
           one_time_prekeys: keys.oneTimePrekeys.slice(0, 5).map((k, i) => ({
             key: k,
@@ -110,7 +110,7 @@ export function useAuth() {
       const isNewDevice = !storedDeviceId
       const needKeysRestore = !storedKeys
       const devId = storedDeviceId || randomUUID()
-      let keys: { identityKey: string; identitySecret: string; signedPrekey: { key: string; signature: string; secret: string }; oneTimePrekeys: string[] } | null = null
+      let keys: { identityKey: string; identitySecret: string; signedPrekey: { key: string; signature: string; secret: string; key_id?: number }; oneTimePrekeys: string[] } | null = null
       if (isNewDevice && !needKeysRestore) {
         keys = (await generateKeys()) as any
       }
@@ -123,7 +123,7 @@ export function useAuth() {
       if (keys) {
         body.keys = {
           identity_key: keys.identityKey,
-          signed_prekey: { key: keys.signedPrekey.key, signature: keys.signedPrekey.signature, key_id: 1 },
+          signed_prekey: { key: keys.signedPrekey.key, signature: keys.signedPrekey.signature, key_id: keys.signedPrekey.key_id ?? 1 },
           one_time_prekeys: keys.oneTimePrekeys.slice(0, 5).map((k, i) => ({ key: k, key_id: i + 1 })),
         }
       }
@@ -157,13 +157,17 @@ export function useAuth() {
   )
 
   const logout = useCallback(() => {
+    const t = token
+    if (t) {
+      api.logout(t).catch(() => {}) // fire-and-forget: revoke on server
+    }
     localStorage.removeItem('user')
     localStorage.removeItem('token')
     localStorage.removeItem('device_id')
     localStorage.removeItem('keys')
     setUser(null)
     setToken(null)
-  }, [])
+  }, [token])
 
   return { user, token, keys, register, login, logout }
 }
