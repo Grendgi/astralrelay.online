@@ -3,7 +3,7 @@ import { api } from '../api/client'
 
 /** Autolock: inactivity timeout in ms. 0 = disabled. */
 const AUTO_LOCK_MS = 15 * 60 * 1000
-import { generateKeys, generateSignedPrekey } from '../crypto/keys'
+import { generateKeys } from '../crypto/keys'
 import { createBackup } from '../crypto/backup'
 import { getKeysFromStorage, setKeysInStorage, clearKeysFromStorage, migrateKeysFromLocalStorage, mergeOtpksToStorage, updateSignedPrekeyInStorage, isKeysEncrypted, unlockKeysWithPassphrase, setKeysWithPassphrase } from '../crypto/key-storage'
 import { initTrustedKeysStorage } from '../crypto/trusted-keys-storage'
@@ -174,8 +174,8 @@ export function useAuth() {
           const { restoreTrustedKeysFromBackup } = await import('../crypto/trusted-keys-storage')
           const restored = await restoreBackup(res.keys_backup.blob, password, res.keys_backup.salt)
           const otpk = Array.isArray(restored.oneTimePrekeys) && restored.oneTimePrekeys.length > 0
-            ? restored.oneTimePrekeys.filter((o: unknown): o is { key_id: number; pub: string; priv: string } =>
-                o && typeof o === 'object' && 'key_id' in (o as object) && 'pub' in (o as object) && 'priv' in (o as object)
+            ? (restored.oneTimePrekeys as unknown[]).filter((o: unknown): o is { key_id: number; pub: string; priv: string } =>
+                Boolean(o && typeof o === 'object' && 'key_id' in o && 'pub' in o && 'priv' in o)
               )
             : []
           const stored: StoredKeys = {

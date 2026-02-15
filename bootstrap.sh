@@ -6,14 +6,14 @@
 
 set -e
 
-echo "=== Chat_VPN — установка в один клик ==="
+echo "=== astralrelay.online — установка в один клик ==="
 echo ""
 
 REPO_URL="${REPO_URL:-https://github.com/Grendgi/astralrelay.online}"
 BRANCH="${BRANCH:-main}"
 EXPECTED_SHA256="${EXPECTED_SHA256:-}"
 BOOTSTRAP_DIFF="${BOOTSTRAP_DIFF:-0}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/Chat_VPN}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/astralrelay.online}"
 STAGING_DIR=""
 
 cleanup_staging() {

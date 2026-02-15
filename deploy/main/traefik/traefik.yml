@@ -1,8 +1,7 @@
-# Traefik — статическая конфигурация
-# HTTP :80, HTTPS :443 (сертификат Let's Encrypt при заданном LETSENCRYPT_EMAIL в .env)
+# Traefik — шаблон (email подставляется из LETSENCRYPT_EMAIL)
+# Генерация: envsubst < traefik.yml.tpl > traefik.yml
 #
-# Access logs: по умолчанию отключены. Если включить — не логировать RequestPath (содержит ws_token в query).
-# См. docs/SECURITY-HARDENING.md
+# Access logs: по умолчанию отключены. Если включить — RequestPath: drop (см. docs/SECURITY-HARDENING.md)
 
 api:
   dashboard: true
@@ -14,11 +13,10 @@ entryPoints:
   websecure:
     address: ":443"
 
-# Для HTTPS замените email на свой (или задайте LETSENCRYPT_EMAIL в .env и подставьте вручную)
 certificatesResolvers:
   letsencrypt:
     acme:
-      email: "admin@astralrelay.online"
+      email: "${LETSENCRYPT_EMAIL:-changeme@example.com}"
       storage: "/letsencrypt/acme.json"
       httpChallenge:
         entryPoint: web
@@ -27,3 +25,6 @@ providers:
   docker:
     endpoint: "unix:///var/run/docker.sock"
     exposedByDefault: false
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true

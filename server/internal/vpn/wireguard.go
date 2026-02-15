@@ -1,7 +1,6 @@
 package vpn
 
 import (
-	"fmt"
 	"strings"
 )
 

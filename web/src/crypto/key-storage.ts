@@ -3,8 +3,8 @@
  * Passphrase wrapping: v2 = PBKDF2+NaCl; v3 = PBKDF2+AES-GCM with non-extractable wrapping key.
  */
 import * as nacl from 'tweetnacl'
-import { decodeBase64, encodeBase64, decodeUTF8, encodeUTF8 } from 'tweetnacl-util'
-import type { StoredKeys, OneTimePrekeyEntry } from '../hooks/useAuth'
+import { decodeBase64, encodeBase64 } from 'tweetnacl-util'
+import type { StoredKeys } from '../hooks/useAuth'
 
 const DB_NAME = 'messenger-key-storage'
 const DB_VERSION = 1

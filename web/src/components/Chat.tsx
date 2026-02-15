@@ -983,7 +983,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
       const { salt } = await api.backupGetSalt(token)
       const payload = await restoreBackup(blobB64, password, salt)
       const otpk = Array.isArray(payload.oneTimePrekeys) && payload.oneTimePrekeys.length > 0
-        ? payload.oneTimePrekeys.filter((o): o is { key_id: number; pub: string; priv: string } =>
+        ? (payload.oneTimePrekeys as unknown[]).filter((o: unknown): o is { key_id: number; pub: string; priv: string } =>
             Boolean(o && typeof o === 'object' && 'key_id' in o && 'pub' in o && 'priv' in o)
           )
         : []

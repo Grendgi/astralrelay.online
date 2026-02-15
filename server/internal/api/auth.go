@@ -17,6 +17,7 @@ type AuthService interface {
 	IssueWSToken(userID int64, deviceID uuid.UUID) (string, error)
 	ListDevices(ctx context.Context, userID int64, currentDeviceID uuid.UUID) ([]auth.DeviceInfo, error)
 	RevokeDevice(ctx context.Context, userID int64, deviceID uuid.UUID) error
+	RenameDevice(ctx context.Context, userID int64, deviceID uuid.UUID, name string) error
 }
 
 type authHandler struct {
