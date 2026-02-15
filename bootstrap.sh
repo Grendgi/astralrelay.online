@@ -63,6 +63,11 @@ if [ "$BOOTSTRAP_DIFF" = "1" ] || [ "$BOOTSTRAP_DIFF" = "true" ]; then
     esac
   fi
 
+  # Не удалять каталог, если скрипт запущен из него (перейти в безопасное место)
+  cur="$(pwd)"
+  case "$cur" in
+    "$INSTALL_DIR"|"$INSTALL_DIR"/*) cd /tmp 2>/dev/null || cd / ;;
+  esac
   rm -rf "$INSTALL_DIR"
   mv "$STAGING_DIR" "$INSTALL_DIR"
   STAGING_DIR=""

@@ -81,9 +81,9 @@ fi
 # wizard UI
 # -----------------------------
 prompt_num() {
-  # $1 label, $2 default
+  # $1 label, $2 default — приглашение в stderr, чтобы не попадало в $(...)
   label="$1"; def="$2"
-  printf "%s [%s]: " "$label" "$def"
+  printf "%s [%s]: " "$label" "$def" >&2
   read -r ans
   [ -z "$ans" ] && ans="$def"
   printf "%s" "$ans"
@@ -91,7 +91,7 @@ prompt_num() {
 
 prompt_text() {
   label="$1"; def="$2"
-  printf "%s [%s]: " "$label" "$def"
+  printf "%s [%s]: " "$label" "$def" >&2
   read -r ans
   [ -z "$ans" ] && ans="$def"
   printf "%s" "$ans"
@@ -100,9 +100,9 @@ prompt_text() {
 prompt_yesno() {
   label="$1"; def="$2" # y|n
   if [ "$def" = "y" ]; then
-    printf "%s [Y/n]: " "$label"
+    printf "%s [Y/n]: " "$label" >&2
   else
-    printf "%s [y/N]: " "$label"
+    printf "%s [y/N]: " "$label" >&2
   fi
   read -r ans
   ans="$(printf "%s" "$ans" | tr '[:upper:]' '[:lower:]')"
@@ -437,9 +437,10 @@ compose_run() {
   tmp="$(mktemp)"
   set +e
   # shellcheck disable=SC2086
-  $COMPOSE -p "$proj" $files --env-file "$envf" up -d --build 2>&1 | tee "$tmp"
-  rc="${PIPESTATUS:-$?}"
+  $COMPOSE -p "$proj" $files --env-file "$envf" up -d --build > "$tmp" 2>&1
+  rc=$?
   set -e
+  cat "$tmp"
 
   if [ "$rc" -ne 0 ]; then
     if grep -qi "pull rate limit" "$tmp"; then
