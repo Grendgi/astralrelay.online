@@ -4,13 +4,14 @@
 
 ## Быстрый старт
 
+Достаточно одного скрипта (Docker, UFW, порты настраиваются автоматически):
+
 ```bash
-./install.sh   # выбрать main
-# или вручную:
-cp deploy/main/.env.example deploy/main/.env
-# Заполните: SERVER_DOMAIN, JWT_SECRET, пароли, LETSENCRYPT_EMAIL
-./deploy/main/run.sh
+curl -fsSL https://raw.githubusercontent.com/Grendgi/astralrelay.online/main/bootstrap.sh | sudo sh
+# в мастере выбрать 1 (main), ввести домен
 ```
+
+Или из клона репозитория: `sudo ./install.sh` → выбрать main. Скрипты в `deploy/` вручную вызывать не нужно.
 
 ## Что поднимается
 
@@ -28,13 +29,14 @@ cp deploy/main/.env.example deploy/main/.env
 1. `.env`: `SERVER_DOMAIN`, `JWT_SECRET`, `DB_ENCRYPTION_KEY`, пароли postgres/minio.
 2. DNS: A/AAAA запись на IP сервера.
 3. HTTPS: Let's Encrypt настраивается в Traefik через LETSENCRYPT_EMAIL (см. [SETUP-MAIN.md](SETUP-MAIN.md)).
+4. **Mesh (подключение selfhost-узлов):** Coordinator слушает порт **9443** (отдельный контейнер, не Traefik). В `docker-compose.mesh.yml` порт уже проброшен (`9443:9443`). Нужно разрешить входящий **9443/TCP** в фаерволе сервера (ufw, iptables) и в security group облака. Токен: `curl -s http://localhost:9443/v1/token` на MAIN или `curl -s http://ВАШ_ДОМЕН:9443/v1/token` снаружи.
 
 ## Устранение 404/502
 
 - Убедитесь, что подняты **main-web-1** и **main-server-1**: `docker ps`.
 - Если **main-server-1** или **main-web-1** в состоянии Restarting/Exit: `docker logs main-server-1`, `docker logs main-web-1`.
 - Проверьте, что DNS для `SERVER_DOMAIN` указывает на IP сервера.
-- Перезапуск: из корня репозитория `docker compose -p main -f deploy/main/docker-compose.yml --env-file deploy/main/.env up -d --build`.
+- Перезапуск: снова `sudo ./install.sh` и выбрать 3 (обновить), или из корня репозитория `docker compose -p main -f deploy/main/docker-compose.yml -f deploy/main/docker-compose.mesh.yml --env-file deploy/main/.env up -d --build`.
 
 ### main-server падает: «invalid port» после host
 

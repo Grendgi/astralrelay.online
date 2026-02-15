@@ -161,6 +161,38 @@ pick_compose() {
 }
 
 # -----------------------------
+# UFW: установка и открытие портов (чтобы пользователю ничего не настраивать)
+# -----------------------------
+ensure_firewall() {
+  _mode="$1"
+  if ! command -v apt-get >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! command -v ufw >/dev/null 2>&1; then
+    say "Установка UFW..."
+    run_root "apt-get update -y >/dev/null 2>&1 || true; DEBIAN_FRONTEND=noninteractive apt-get install -y ufw >/dev/null 2>&1 || true"
+  fi
+  command -v ufw >/dev/null 2>&1 || return 0
+
+  say "Настройка фаервола (UFW)..."
+  run_root "ufw allow 22/tcp comment 'SSH' 2>/dev/null || true"
+  run_root "ufw allow 80/tcp comment 'HTTP' 2>/dev/null || true"
+  run_root "ufw allow 443/tcp comment 'HTTPS' 2>/dev/null || true"
+  if [ "$_mode" = "main" ]; then
+    run_root "ufw allow 8082/tcp comment 'Traefik dashboard' 2>/dev/null || true"
+    run_root "ufw allow 9443/tcp comment 'Coordinator mesh' 2>/dev/null || true"
+  else
+    run_root "ufw allow 3000/tcp comment 'Web dev' 2>/dev/null || true"
+    run_root "ufw allow 8080/tcp comment 'API' 2>/dev/null || true"
+    run_root "ufw allow 51820/udp comment 'WireGuard mesh' 2>/dev/null || true"
+    run_root "ufw allow 9100/tcp comment 'Backup receiver' 2>/dev/null || true"
+  fi
+  run_root "ufw --force enable 2>/dev/null || true"
+  run_root "ufw reload 2>/dev/null || true"
+  say "UFW: порты открыты."
+}
+
+# -----------------------------
 # env helpers
 # -----------------------------
 update_env() {
@@ -290,6 +322,7 @@ run_wizard() {
         say "Join token получен автоматически."
       else
         warn "Join token не получен автоматически."
+        say "На MAIN-сервере откройте порт 9443 (TCP). Токен: curl -s http://$MAIN_DOMAIN:9443/v1/token" >&2
         JOIN_TOKEN="$(prompt_text "Вставь JOIN_TOKEN (или оставь пустым и задашь позже)" "")"
       fi
     else
@@ -333,6 +366,7 @@ fi
 
 ensure_docker
 pick_compose
+ensure_firewall "$MODE"
 
 say ""
 say "=== Установка ==="
@@ -445,6 +479,36 @@ if [ "$MODE" = "selfhost" ] && [ -n "$MAIN_DOMAIN" ]; then
       JOIN_TOKEN="$(fetch_join_token "$COORDINATOR_URL" || true)"
     fi
   fi
+  # coordinator по умолчанию без TLS — сохраняем http для setup-mesh
+  coord_url_for_env="$COORDINATOR_URL"
+  echo "$coord_url_for_env" | grep -q '^https://' && coord_url_for_env="$(echo "$coord_url_for_env" | sed 's|^https://|http://|')"
+  update_env "COORDINATOR_URL" "$coord_url_for_env" "$ENV_FILE"
+  [ -n "$JOIN_TOKEN" ] && update_env "MESH_JOIN_TOKEN" "$JOIN_TOKEN" "$ENV_FILE"
+
+  # Регистрация в mesh (WireGuard + backup peers), если есть токен
+  if [ -n "$JOIN_TOKEN" ] && [ -n "$DOMAIN" ] && [ -f "$SCRIPT_DIR/scripts/setup-mesh.sh" ]; then
+    say "Регистрация в mesh..."
+    mesh_tmp="$(mktemp)"
+    if COORDINATOR_URL="$coord_url_for_env" JOIN_TOKEN="$JOIN_TOKEN" DOMAIN="$DOMAIN" \
+       USE_SUBDOMAIN="$([ "$ADDRESS_MODE" = "subdomain" ] && echo "1" || echo "0")" MAIN_DOMAIN="$MAIN_DOMAIN" \
+       MTLS_DIR="$SCRIPT_DIR/deploy/selfhost/federation" MTLS_CONTAINER_PATH="/etc/messenger/federation" \
+       sh "$SCRIPT_DIR/scripts/setup-mesh.sh" > "$mesh_tmp" 2>&1; then
+      while IFS= read -r line; do
+        case "$line" in
+          MESH_VPN_ADDR=*) update_env "MESH_VPN_ADDR" "${line#MESH_VPN_ADDR=}" "$ENV_FILE" ;;
+          MESH_BACKUP_PEERS=*) update_env "MESH_BACKUP_PEERS" "${line#MESH_BACKUP_PEERS=}" "$ENV_FILE" ;;
+          MESH_BACKUP_SECRET=*) update_env "MESH_BACKUP_SECRET" "${line#MESH_BACKUP_SECRET=}" "$ENV_FILE" ;;
+          FEDERATION_MTLS_CLIENT_CERT=*) update_env "FEDERATION_MTLS_CLIENT_CERT" "${line#FEDERATION_MTLS_CLIENT_CERT=}" "$ENV_FILE" ;;
+          FEDERATION_MTLS_CLIENT_KEY=*) update_env "FEDERATION_MTLS_CLIENT_KEY" "${line#FEDERATION_MTLS_CLIENT_KEY=}" "$ENV_FILE" ;;
+        esac
+      done < "$mesh_tmp"
+      say "Mesh: узел зарегистрирован."
+    else
+      warn "setup-mesh не выполнен (порт 9443 на MAIN или WireGuard). Добавьте MESH_JOIN_TOKEN в .env и запустите scripts/setup-mesh.sh позже."
+      [ -s "$mesh_tmp" ] && say "$(cat "$mesh_tmp")" >&2
+    fi
+    rm -f "$mesh_tmp" 2>/dev/null || true
+  fi
 fi
 
 # -----------------------------
@@ -485,6 +549,7 @@ if [ "$MODE" = "main" ]; then
   say ""
   say "=== MAIN готов ==="
   say "URL: https://$DOMAIN"
+  say "Фаервол (UFW): порты 22, 80, 443, 8082, 9443 открыты."
   say "Если 404/502: проверьте 'docker ps' (должны быть main-web-1, main-server-1) и 'docker logs main-server-1 main-web-1'."
   exit 0
 fi
@@ -502,13 +567,14 @@ else
   fi
 fi
 
-# mesh compose если есть
-[ -f "deploy/selfhost/docker-compose.mesh.yml" ] && files="$files -f deploy/selfhost/docker-compose.mesh.yml"
+# mesh compose — только если узел зарегистрирован в coordinator (есть MESH_VPN_ADDR)
+grep -q '^MESH_VPN_ADDR=' "$ENV_FILE" 2>/dev/null && [ -f "deploy/selfhost/docker-compose.mesh.yml" ] && files="$files -f deploy/selfhost/docker-compose.mesh.yml"
 
 compose_run "selfhost" "$files" "$ENV_FILE"
 
 say ""
 say "=== SELFHOST готов ==="
+say "Фаервол (UFW): порты 22, 80, 443, 3000, 8080, 51820/udp, 9100 открыты."
 if grep -q '^MESH_SUBDOMAIN_MODE=1' "$ENV_FILE" 2>/dev/null; then
   say "URL: https://$(get_env SERVER_DOMAIN "$ENV_FILE")"
 elif [ "$DOMAIN" != "localhost" ]; then

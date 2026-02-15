@@ -4,15 +4,14 @@
 
 ## Быстрый старт
 
+Достаточно одного скрипта (Docker, UFW, порты настраиваются автоматически):
+
 ```bash
-sudo ./install-selfhost.sh   # только self-host (рекомендуется)
-# или:
-sudo ./install.sh            # выбрать selfhost, ввести IP или домен
-# вручную:
-cp deploy/selfhost/.env.example deploy/selfhost/.env
-# Заполните: SERVER_DOMAIN, JWT_SECRET, пароли
-./deploy/selfhost/run.sh
+curl -fsSL https://raw.githubusercontent.com/Grendgi/astralrelay.online/main/bootstrap.sh | sudo sh
+# в мастере выбрать 2 (selfhost)
 ```
+
+Или только selfhost: `sudo ./install-selfhost.sh`. Скрипты в `deploy/` вручную вызывать не нужно.
 
 ## Что поднимается
 
@@ -33,6 +32,14 @@ cp deploy/selfhost/.env.example deploy/selfhost/.env
 3. HTTPS: nginx/caddy/traefik с Let's Encrypt.
 
 Без своего домена: `YOUR_IP.nip.io` или `YOUR_IP.sslip.io` (см. [SELF-HOSTING.md](SELF-HOSTING.md)).
+
+## Подключение к mesh (main)
+
+Если в мастере вы выбрали «Подключить mesh» и **JOIN_TOKEN не подтянулся автоматически**:
+
+1. На **MAIN**-сервере откройте порт **9443/TCP** (фаервол / security group).
+2. Получите токен: на MAIN выполните `curl -s http://localhost:9443/v1/token` или с другой машины `curl -s http://ДОМЕН_MAIN:9443/v1/token`.
+3. Вставьте токен в мастере при установке selfhost или позже: добавьте в `deploy/selfhost/.env` строки `COORDINATOR_URL=http://ДОМЕН_MAIN:9443` и `MESH_JOIN_TOKEN=полученный_токен`, затем снова запустите `./install.sh` (выбор 2, вставьте токен) — скрипт зарегистрирует узел в mesh. Либо вручную: `JOIN_TOKEN=... COORDINATOR_URL=... DOMAIN=... ./scripts/setup-mesh.sh`, добавьте вывод (MESH_VPN_ADDR и др.) в .env и перезапустите `./deploy/selfhost/run.sh`.
 
 ## Cloudflare Tunnel (без открытия портов)
 
