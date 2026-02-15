@@ -29,7 +29,8 @@ curl -fsSL https://raw.githubusercontent.com/Grendgi/astralrelay.online/main/boo
 1. `.env`: `SERVER_DOMAIN`, `JWT_SECRET`, `DB_ENCRYPTION_KEY`, пароли postgres/minio.
 2. DNS: A/AAAA запись на IP сервера.
 3. HTTPS: Let's Encrypt настраивается в Traefik через LETSENCRYPT_EMAIL (см. [SETUP-MAIN.md](SETUP-MAIN.md)).
-4. **Mesh (подключение selfhost-узлов):** Coordinator слушает порт **9443** (отдельный контейнер, не Traefik). В `docker-compose.mesh.yml` порт уже проброшен (`9443:9443`). Нужно разрешить входящий **9443/TCP** в фаерволе сервера (ufw, iptables) и в security group облака. Токен: `curl -s http://localhost:9443/v1/token` на MAIN или `curl -s http://ВАШ_ДОМЕН:9443/v1/token` снаружи.
+4. **Mesh (подключение selfhost-узлов):** Coordinator слушает порт **9443** (отдельный контейнер, не Traefik). В `docker-compose.mesh.yml` порт уже проброшен (`9443:9443`). Нужно разрешить входящий **9443/TCP** в фаерволе сервера (ufw, iptables) и в security group облака. Токен: `curl -s http://localhost:9443/v1/token` на MAIN или `curl -s http://ВАШ_ДОМЕН:9443/v1/token` снаружи.  
+   **Если домен за Cloudflare:** порт 9443 через прокси (оранжевое облако) не поддерживается. Включите для записи **DNS only** (серое облако) или создайте отдельную A-запись на IP сервера с серым облаком (например `mesh.astralrelay.online`), иначе selfhost не получит токен автоматически.
 
 ## Устранение 404/502
 

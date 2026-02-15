@@ -35,6 +35,8 @@ curl -fsSL https://raw.githubusercontent.com/Grendgi/astralrelay.online/main/boo
 
 ## Подключение к mesh (main)
 
+**Cloudflare:** если домен main за прокси (оранжевое облако), порт 9443 до coordinator недоступен. В панели Cloudflare переведите запись на **DNS only** (серое облако) или заведите отдельную A-запись (например `mesh.домен`) с серым облаком на IP main.
+
 Если в мастере вы выбрали «Подключить mesh» и **JOIN_TOKEN не подтянулся автоматически**:
 
 1. На **MAIN**-сервере откройте порт **9443/TCP** (фаервол / security group).

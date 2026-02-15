@@ -21,25 +21,27 @@
 | 🔒 **VPN** | Xray (VLESS, VMess, Trojan) — пользователь скачивает конфиг в один клик |
 | 📱 **Push** | Web Push уведомления (VAPID) |
 | 🚀 **nip.io** | Домен по IP без покупки — `1.2.3.4.nip.io` → Let's Encrypt |
-| 🕸️ **Mesh** | WireGuard mesh между серверами, бэкапы БД на peer-узлы |
+| 🕸️ **Mesh** | WireGuard mesh между серверами, coordinator (:9443), бэкапы БД на peer-узлы |
 
 ---
 
 ## 🚀 Быстрый старт
 
-### Вариант 1: Одна команда (zero config)
+Установка в один шаг: **Docker**, **UFW** (порты), секреты и nip.io настраиваются автоматически. Скрипты в `deploy/` вручную вызывать не нужно.
+
+### Одна команда (main или selfhost)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Grendgi/astralrelay.online/main/bootstrap.sh | sudo sh
 ```
 
-Docker, секреты, IP→nip.io, VAPID — всё автоматически. Без вопросов. Для фиксации версии: `BRANCH=v0.3.1` или `EXPECTED_SHA256=...`.
+Откроется мастер: **1** — главный хаб (main), **2** — свой узел (selfhost), **3** — обновить текущую установку. Домен, mesh, VAPID — по подсказкам.
 
----
+Фиксация версии: `BRANCH=v0.3.1` или `EXPECTED_COMMIT=abc123`.
 
-### Вариант 2: Только self-host (рекомендуется)
+### Только self-host
 
-Для своего инстанса — домен главного по умолчанию `astralrelay.online`:
+Если нужен только свой инстанс (без выбора main/selfhost в мастере):
 
 ```bash
 git clone https://github.com/Grendgi/astralrelay.online.git
@@ -47,11 +49,7 @@ cd astralrelay.online
 sudo ./install-selfhost.sh
 ```
 
----
-
-### Вариант 3: Main или self-host
-
-Универсальный скрипт — выбор режима (hub или свой инстанс):
+### Универсальный install.sh (из клона)
 
 ```bash
 git clone https://github.com/Grendgi/astralrelay.online.git
@@ -59,14 +57,13 @@ cd astralrelay.online
 sudo ./install.sh
 ```
 
-Интерактивно: домен/IP, email для Let's Encrypt, mesh. Секреты генерируются автоматически.
+Тот же мастер, что и в bootstrap: выбор main/selfhost, домен, подключение к mesh (coordinator на main), standalone/subdomain.
 
----
-
-### Автоматический режим (CI / без TTY)
+### Без TTY (CI / автоматический режим)
 
 ```bash
 INSTALL_AUTO=1 INSTALL_MODE=selfhost sudo ./install.sh
+# или INSTALL_MODE=main для главного хаба
 ```
 
 ---
@@ -76,13 +73,13 @@ INSTALL_AUTO=1 INSTALL_MODE=selfhost sudo ./install.sh
 ```
                     [astralrelay.online] — главный хаб
                                │
-               ┌───────────────┼───────────────┐
-               │               │               │
-          [Traefik]       [server 1]      [server 2]
-               │               │               │
-               └───────────────┼───────────────┘
+        ┌──────────────────────┼──────────────────────┐
+        │                      │                      │
+   [Traefik :80/443]    [Coordinator :9443]    [server] [server2]
+        │                      │                      │
+        └──────────────────────┼──────────────────────┘
                                │
-                     [PostgreSQL] [Redis] [MinIO]
+                     [PostgreSQL] [Redis] [MinIO] [Xray]
                                │
                ────────────────┼─────────────── федерация
                                │
@@ -90,7 +87,9 @@ INSTALL_AUTO=1 INSTALL_MODE=selfhost sudo ./install.sh
      nip.io/домен       nip.io/домен       subdomain*
 ```
 
-\* Subdomain главного (1-2-3-4.astralrelay.online)
+\* Subdomain главного: например `1-2-3-4.astralrelay.online`.
+
+**Cloudflare:** если домен main за прокси (оранжевое облако), порт **9443** (coordinator) снаружи недоступен. Нужна запись с **DNS only** (серое облако) или отдельная A-запись на IP сервера — иначе selfhost не получит join token автоматически. Подробнее: [RUN-MAIN](docs/RUN-MAIN.md), [RUN-SELFHOST](docs/RUN-SELFHOST.md).
 
 ---
 
@@ -102,7 +101,7 @@ INSTALL_AUTO=1 INSTALL_MODE=selfhost sudo ./install.sh
 | **Frontend** | React 18, TypeScript, Vite |
 | **E2EE** | Signal Protocol (X3DH + Double Ratchet) или MVP (X25519 + NaCl) |
 | **VPN** | Xray-core (VLESS, VMess, Trojan) |
-| **Инфра** | Docker, Traefik, Let's Encrypt |
+| **Инфра** | Docker, Traefik, Let's Encrypt, UFW |
 
 ---
 
@@ -110,14 +109,16 @@ INSTALL_AUTO=1 INSTALL_MODE=selfhost sudo ./install.sh
 
 | Раздел | Описание |
 |--------|----------|
-| [Главный сервер (Hub)](docs/SETUP-MAIN.md) | Traefik, HA (server+server2), Let's Encrypt |
-| [Self-host](docs/SETUP-SELFHOST.md) | Свой инстанс, nip.io, Cloudflare Tunnel |
+| [Запуск Main (hub)](docs/RUN-MAIN.md) | Быстрый старт main, порты, 404/502, Cloudflare, mesh |
+| [Запуск Self-host](docs/RUN-SELFHOST.md) | Быстрый старт selfhost, mesh, JOIN_TOKEN, Cloudflare |
+| [Главный сервер (детально)](docs/SETUP-MAIN.md) | Traefik, HA, Let's Encrypt |
+| [Self-host (детально)](docs/SETUP-SELFHOST.md) | nip.io, Cloudflare Tunnel |
 | [VPN Mesh + бэкапы](docs/MESH-AND-BACKUP.md) | Coordinator, WireGuard mesh, mTLS, pg_dump |
 | [Subdomain главного](docs/SUBDOMAIN-MODE.md) | 1-2-3-4.astralrelay.online |
 | [Self-Hosting обзор](docs/SELF-HOSTING.md) | Роли, nip.io, HA, федерация |
 | [Защита федерации](docs/FEDERATION-SECURITY.md) | Rate limit, blocklist, mTLS, webhook-алерты |
-| [E2EE: Signal vs MVP](docs/E2EE.md) | Режимы шифрования, проверка Signal, IndexedDB |
-| [Усиление безопасности](docs/SECURITY-HARDENING.md) | JWT (iss/aud/typ, HS256), ws_token, ревокация, Traefik |
+| [E2EE: Signal vs MVP](docs/E2EE.md) | Режимы шифрования, IndexedDB |
+| [Усиление безопасности](docs/SECURITY-HARDENING.md) | JWT, ws_token, ревокация, Traefik |
 | [WAF](docs/WAF.md) | Traefik/CrowdSec/ModSecurity |
 | [Dev-режим](docs/RUN-DEV.md) | Локальная разработка |
 | [Архитектура](docs/architecture.md) | Схема, компоненты, потоки |
@@ -129,39 +130,41 @@ INSTALL_AUTO=1 INSTALL_MODE=selfhost sudo ./install.sh
 
 ```
 astralrelay.online/
+├── bootstrap.sh         # Установка в один клик (curl | sh)
+├── install.sh           # Универсальный мастер: main / selfhost / update
+├── install-selfhost.sh  # Только self-host
 ├── deploy/
-│   ├── main/           # Hub: Traefik, server+server2, HA
-│   ├── selfhost/       # Self-host: nip.io, домен, mesh
-│   └── dev/            # Разработка
-├── server/             # Go backend (API, федерация, VPN)
-├── web/                # React frontend
-├── xray/               # Xray VPN конфигурация
-├── mesh/               # Coordinator, backup-receiver (Go)
-├── scripts/            # setup-mesh, backup-to-peers, smoke-test, clean-rebuild, fmt, lint
-├── install.sh          # Универсальная установка (main/selfhost)
-├── install-selfhost.sh # Только self-host
-└── docs/               # Документация
+│   ├── main/            # Hub: Traefik, server, coordinator (:9443), mesh
+│   ├── selfhost/        # Self-host: nip.io, домен, mesh
+│   └── dev/             # Разработка
+├── server/              # Go backend (API, федерация, VPN)
+├── web/                 # React frontend
+├── xray/                # Xray VPN конфигурация
+├── mesh/                # Coordinator, backup-receiver (Go)
+├── scripts/             # setup-mesh, backup-to-peers, smoke-test, clean-rebuild, fmt, lint
+└── docs/                # Документация
 ```
 
 ---
 
-## 🔧 Ручной запуск
+## 🔧 Перезапуск и ручной запуск
+
+Для первичной установки достаточно `bootstrap.sh` или `install.sh`. Скрипты в `deploy/` нужны для перезапуска или ручного управления:
 
 ```bash
-# Подготовка сервера (Docker)
-sudo ./deploy/setup-server.sh
-
-# Main hub
+# Main (из корня репозитория)
 ./deploy/main/run.sh
 
 # Self-host
 ./deploy/selfhost/run.sh
 
-# Dev (Makefile)
+# Dev
 make dev
+# или ./deploy/dev/run.sh
 ```
 
-Или напрямую: `./deploy/dev/run.sh`. Полезные команды: `make fmt`, `make lint`, `make migrate`, `make build`, `make clean`.
+Подготовка сервера (только Docker, без установки приложения): `sudo ./deploy/setup-server.sh`.  
+Полезные команды: `make fmt`, `make lint`, `make migrate`, `make build`, `make clean`.
 
 ---
 
@@ -175,19 +178,21 @@ make dev
 
 ## 📋 Требования
 
-| Роль | RAM | Диск | Порты |
-|------|-----|------|-------|
-| **Main** | 2 GB | 10 GB | 80, 443, 8082 |
-| **Self-host** | 1 GB | 5 GB | 80, 443 или 3000, 8080 |
+| Роль | RAM | Диск | Порты (открываются UFW автоматически) |
+|------|-----|------|--------------------------------------|
+| **Main** | 2 GB | 10 GB | 22, 80, 443, 8082 (Traefik), **9443** (coordinator) |
+| **Self-host** | 1 GB | 5 GB | 22, 80, 443, 3000, 8080, 51820/udp, 9100 |
 
-ОС: Linux (Ubuntu, Debian, Alpine, CentOS)
+ОС: Linux (рекомендуется Ubuntu/Debian — для автоустановки Docker и UFW).
+
+**Docker Hub:** при нескольких установках подряд возможен rate limit для неавторизованных pull. Решение: `sudo docker login` или повторить установку через несколько часов.
 
 ---
 
 ## 🤝 Участие в сети
 
-- **Главный хаб** — основной домен, точка входа для пользователей
-- **Self-host** — ваш инстанс расширяет федерацию, свои данные, свой контроль
+- **Главный хаб (main)** — основной домен, точка входа, coordinator для mesh.
+- **Self-host** — ваш инстанс расширяет федерацию, свои данные, свой контроль.
 
 Подробнее: [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md)
 
