@@ -78,3 +78,63 @@ describe('key-storage no-op invariants', () => {
     expect(keys?.oneTimePrekeys.find((o) => o.key_id === 1)).toBeUndefined()
   })
 })
+
+describe('key lifecycle (rotate/top-up)', () => {
+  beforeEach(async () => {
+    await clearKeysFromStorage()
+    await setKeysInStorage(mockKeys)
+  })
+
+  afterEach(async () => {
+    await clearKeysFromStorage()
+  })
+
+  it('rotate: update signed prekey and verify new key_id', async () => {
+    const newSpk = {
+      key: 'x'.repeat(44),
+      signature: 'y'.repeat(88),
+      secret: 'z'.repeat(44),
+      key_id: 42,
+    }
+    await updateSignedPrekeyInStorage(newSpk)
+    const keys = await getKeysFromStorage()
+    expect(keys?.signedPrekey.key_id).toBe(42)
+    expect(keys?.signedPrekey.key).toBe(newSpk.key)
+    expect(keys?.identityKey).toBe(mockKeys.identityKey)
+  })
+
+  it('top-up: merge new OTPKs increases count', async () => {
+    const before = (await getKeysFromStorage())!.oneTimePrekeys.length
+    await mergeOtpksToStorage([
+      { key_id: 10, pub: 'n'.repeat(44), priv: 'm'.repeat(44) },
+      { key_id: 11, pub: 'p'.repeat(44), priv: 'q'.repeat(44) },
+    ])
+    const keys = await getKeysFromStorage()
+    expect(keys!.oneTimePrekeys.length).toBe(before + 2)
+    expect(keys!.oneTimePrekeys.find((o) => o.key_id === 10)).toBeDefined()
+    expect(keys!.oneTimePrekeys.find((o) => o.key_id === 11)).toBeDefined()
+  })
+
+  it('rotate + top-up: full lifecycle sequence', async () => {
+    await updateSignedPrekeyInStorage({ ...mockKeys.signedPrekey, key_id: 2, key: 'r'.repeat(44) })
+    await mergeOtpksToStorage([{ key_id: 20, pub: 'a'.repeat(44), priv: 'b'.repeat(44) }])
+    await removeOtpkFromStorage(1)
+    const keys = await getKeysFromStorage()
+    expect(keys?.signedPrekey.key_id).toBe(2)
+    expect(keys?.oneTimePrekeys.map((o) => o.key_id).sort((a, b) => a - b)).toEqual([2, 20])
+  })
+
+  it('mergeOtpksToStorage: empty array does not write', async () => {
+    const before = JSON.stringify(await getKeysFromStorage())
+    await mergeOtpksToStorage([])
+    const after = JSON.stringify(await getKeysFromStorage())
+    expect(after).toBe(before)
+  })
+
+  it('updateSignedPrekeyInStorage: no-op when keys is null', async () => {
+    await clearKeysFromStorage()
+    await updateSignedPrekeyInStorage(mockKeys.signedPrekey)
+    const keys = await getKeysFromStorage()
+    expect(keys).toBeNull()
+  })
+})

@@ -188,15 +188,17 @@ export async function markVerified(
   const map = await getMap()
   const key = storageKey(recipient, deviceId)
   let raw = map[key]
-  if (!raw && identityKey) {
-    map[key] = { identityKey }
+  if (!raw) {
+    if (!identityKey) return
+    const now = Date.now()
+    map[key] = { identityKey, seenAt: now }
     raw = map[key]
   }
-  const entry = raw ? toTrustEntry(raw) : null
-  if (!entry) return
+  const entry = toTrustEntry(raw)
+  const now = Date.now()
   map[key] = {
     ...entry,
-    verifiedAt: Date.now(),
+    verifiedAt: now,
     verifiedMethod: method,
   }
   await setMap(map)
