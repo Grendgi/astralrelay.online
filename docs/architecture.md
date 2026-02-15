@@ -23,13 +23,13 @@
 ```
                     [main-domain.com] — основной хаб
                               │
-              ┌───────────────┼───────────────┐
-              │               │               │
-         [Traefik]      [server 1]      [server 2]
-              │               │               │
-              └───────────────┼───────────────┘
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+   [Traefik :80/443]  [Coordinator :9443]   [server 1] [server 2]
+        │                     │                     │
+        └─────────────────────┼─────────────────────┘
                               │
-                    [PostgreSQL] [Redis]
+                    [PostgreSQL] [Redis] [MinIO] [Xray]
                               │
               ────────────────┼─────────────── федерация
                               │
@@ -47,9 +47,10 @@
 
 | Сценарий | Команда |
 |----------|---------|
-| Main hub | `./install.sh` (режим main) или `./deploy/main/run.sh` |
-| Self-host | `./install-selfhost.sh` или `./install.sh` (режим selfhost) |
-| Main + Mesh | `MESH_ENABLED=1 ./install.sh` — coordinator :9443, backup-receiver |
+| Установка в один клик | `curl -fsSL .../bootstrap.sh \| sudo sh` — main (1) или selfhost (2) |
+| Main hub | `sudo ./install.sh` (режим 1) или `./deploy/main/run.sh` |
+| Self-host | `sudo ./install-selfhost.sh` или `sudo ./install.sh` (режим 2) |
+| Coordinator (mesh) | Всегда на main (порт 9443), см. [RUN-MAIN.md](RUN-MAIN.md), [MESH-AND-BACKUP.md](MESH-AND-BACKUP.md) |
 | HA (хаб) | `docker compose --profile ha up -d` (deploy/main) |
 
-Подробнее: [SELF-HOSTING.md](SELF-HOSTING.md), [MESH-AND-BACKUP.md](MESH-AND-BACKUP.md)
+Подробнее: [RUN-MAIN.md](RUN-MAIN.md), [RUN-SELFHOST.md](RUN-SELFHOST.md), [SELF-HOSTING.md](SELF-HOSTING.md), [MESH-AND-BACKUP.md](MESH-AND-BACKUP.md)

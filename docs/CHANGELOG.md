@@ -6,6 +6,20 @@
 
 ---
 
+## [0.2.1] — 2025-02-16
+
+### Изменено
+
+- **Развёртывание:** единый вход через `bootstrap.sh` (curl \| sudo sh); RUN-MAIN.md и RUN-SELFHOST.md вынесены в быстрый старт; в индекс добавлены ссылки на них.
+- **Coordinator:** на main всегда поднимается (порт 9443), без MESH_ENABLED; учтено в SETUP-MAIN, MESH-AND-BACKUP, architecture.
+- **UFW:** установка и открытие портов (22, 80, 443, 8082, 9443 для main; 3000, 8080, 51820/udp, 9100 для selfhost при mesh) описаны как автоматические в install.sh/bootstrap.
+- **Cloudflare:** в RUN-MAIN, RUN-SELFHOST, SETUP-MAIN, MESH-AND-BACKUP добавлено пояснение: для доступа к 9443 нужна запись DNS only (серое облако) или A на IP.
+- **Selfhost mesh:** COORDINATOR_URL, MESH_JOIN_TOKEN в .env; опциональный scripts/setup-mesh.sh; обновлены SETUP-SELFHOST, RUN-SELFHOST, SELF-HOSTING.
+- **DEPLOY-AUTOMATION:** bootstrap, UFW, INSTALL_AUTO=1, coordinator всегда.
+- **CLEAN-REBUILD, TESTING:** учтён docker-compose.mesh.yml для main. architecture: схема с Coordinator, ссылки на RUN-MAIN/RUN-SELFHOST.
+
+---
+
 ## [0.2] — 2025-02-14
 
 ### Добавлено

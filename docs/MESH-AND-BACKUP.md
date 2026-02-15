@@ -17,24 +17,30 @@
 
 ### Первый узел (Main, coordinator)
 
+На main **coordinator всегда поднимается** (порт **9443**) вместе с основным compose (`docker-compose.mesh.yml`). Отдельно включать mesh не нужно.
+
 ```bash
-MESH_ENABLED=1 sudo ./install.sh
-# Режим: 1 (main)
+curl -fsSL https://raw.githubusercontent.com/Grendgi/astralrelay.online/main/bootstrap.sh | sudo sh
+# или: sudo ./install.sh → режим 1 (main)
 ```
 
-Поднимаются: coordinator :9443, backup-receiver :9100, WireGuard. После запуска получите JOIN_TOKEN:
+После запуска токен для подключения selfhost-узлов:
 
 ```bash
 curl -s http://YOUR_DOMAIN:9443/v1/token
 # {"token":"xxx"}
 ```
 
-### Второй и последующие узлы
+**Cloudflare:** если домен main за прокси (оранжевое облако), порт 9443 снаружи недоступен. Нужна запись с **DNS only** (серое облако) или отдельная A-запись на IP main — иначе selfhost не получит токен автоматически. См. [RUN-MAIN.md](RUN-MAIN.md).
 
-Токен запрашивается автоматически — вручную ничего получать не нужно.
+### Второй и последующие узлы (selfhost)
+
+При установке selfhost в мастере можно выбрать «Подключить mesh» и ввести домен main — токен запрашивается автоматически с `http://ДОМЕН_MAIN:9443/v1/token`. Если токен не подтянулся (например, 9443 закрыт Cloudflare), получите его вручную на main и вставьте в мастере или добавьте в `deploy/selfhost/.env`: `COORDINATOR_URL=http://ДОМЕН_MAIN:9443`, `MESH_JOIN_TOKEN=...`, затем при необходимости запустите `scripts/setup-mesh.sh`. Подробнее: [RUN-SELFHOST.md](RUN-SELFHOST.md).
 
 ```bash
-INSTALL_COORDINATOR_URL=http://first-hub.domain:9443 sudo ./install.sh
+# Установка selfhost с указанием coordinator (если нужен нестандартный URL)
+COORDINATOR_URL=http://first-hub.domain:9443 sudo ./install.sh
+# Режим: 2 (selfhost)
 ```
 
 **Subdomain главного домена** — трафик через main Traefik:
@@ -85,4 +91,4 @@ INSTALL_ADDRESS_MODE=subdomain MAIN_DOMAIN=astralrelay.online sudo ./install.sh
 
 ### mTLS при mesh join
 
-При `COORDINATOR_CA_CERT` и `COORDINATOR_CA_KEY` coordinator выдаёт клиентские сертификаты для федерации. `setup-mesh.sh` при наличии `JOIN_TOKEN` автоматически запрашивает сертификат и добавляет `FEDERATION_MTLS_CLIENT_CERT/KEY` в `.env`. Подробнее: [FEDERATION-SECURITY.md](FEDERATION-SECURITY.md).
+При `COORDINATOR_CA_CERT` и `COORDINATOR_CA_KEY` coordinator выдаёт клиентские сертификаты для федерации. `scripts/setup-mesh.sh` при наличии `MESH_JOIN_TOKEN` (или `JOIN_TOKEN`) и `COORDINATOR_URL` автоматически запрашивает сертификат и добавляет `FEDERATION_MTLS_CLIENT_CERT/KEY` в `.env`. Подробнее: [FEDERATION-SECURITY.md](FEDERATION-SECURITY.md).

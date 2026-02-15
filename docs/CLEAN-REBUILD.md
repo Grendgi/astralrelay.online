@@ -36,14 +36,14 @@
 Если скрипт не подходит под вашу конфигурацию:
 
 ```bash
-# Остановить и удалить volumes
-docker compose -f deploy/main/docker-compose.yml --env-file deploy/main/.env down -v
+# Main (с mesh: coordinator и backup-receiver)
+docker compose -p main -f deploy/main/docker-compose.yml -f deploy/main/docker-compose.mesh.yml --env-file deploy/main/.env down -v
 
 # Удалить конкретные volumes
 docker volume rm main_postgres_data main_minio_data main_redis_data main_server_data
 
 # Пересобрать и запустить
-docker compose -f deploy/main/docker-compose.yml --env-file deploy/main/.env up -d --build
+docker compose -p main -f deploy/main/docker-compose.yml -f deploy/main/docker-compose.mesh.yml --env-file deploy/main/.env up -d --build
 ```
 
 ## Очистка на стороне клиента

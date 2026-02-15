@@ -11,12 +11,14 @@
 | ОС | Linux (Ubuntu 22+, Debian 12+, Alpine, CentOS) |
 | RAM | 2 GB |
 | Диск | 10 GB |
-| Порты | 80, 443 (обязательно), 8082 (Traefik dashboard) |
+| Порты | 80, 443 (обязательно), 8082 (Traefik dashboard), **9443** (coordinator для mesh) |
 | Домен | Свой домен или IP для nip.io |
+
+**При установке через `bootstrap.sh` или `install.sh`** Docker и UFW настраиваются автоматически (порты 22, 80, 443, 8082, 9443). Ручная подготовка нужна только при развёртывании без этих скриптов.
 
 ---
 
-## 2. Подготовка сервера
+## 2. Подготовка сервера (при ручной установке)
 
 ### 2.1 Установка Docker
 
@@ -32,6 +34,7 @@ sudo ./deploy/setup-server.sh
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
 sudo ufw allow 8082/tcp
+sudo ufw allow 9443/tcp   # coordinator (mesh)
 sudo ufw enable
 ```
 
@@ -39,13 +42,13 @@ sudo ufw enable
 
 ## 3. Развёртывание
 
-### 3.1 Одна команда (zero config)
+### 3.1 Одна команда (рекомендуется)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Grendgi/astralrelay.online/main/bootstrap.sh | sudo sh
 ```
 
-С переменными: `INSTALL_MODE=main REPO_URL=https://... sudo -E ./bootstrap.sh`
+В мастере выбрать **1** (main), ввести домен. Docker, UFW, секреты — автоматически. С переменными: `INSTALL_MODE=main REPO_URL=https://... sudo -E ./bootstrap.sh`
 
 ### 3.2 Интерактивная установка
 
@@ -116,10 +119,12 @@ docker run --rm node:20-alpine npx web-push generate-vapid-keys
 
 ## 9. Mesh и mTLS (опционально)
 
-При `MESH_ENABLED=1` `install.sh` генерирует CA в `deploy/main/mesh-ca/` и настраивает coordinator для выдачи mTLS-сертификатов при join. Self-host узлы получают сертификаты автоматически через `setup-mesh.sh`.
+**Coordinator** всегда поднимается на main (порт **9443**, `docker-compose.mesh.yml`). Токен для подключения selfhost: `curl -s http://YOUR_DOMAIN:9443/v1/token`. Если домен за **Cloudflare** (оранжевое облако), порт 9443 снаружи недоступен — используйте запись с **DNS only** (серое облако) или отдельную A-запись на IP. Подробнее: [RUN-MAIN.md](RUN-MAIN.md).
+
+При настройке mTLS `install.sh` может генерировать CA в `deploy/main/mesh-ca/`; coordinator выдаёт mTLS-сертификаты при join. Self-host получают сертификаты через `scripts/setup-mesh.sh`.
 
 ---
 
 ## 10. Архитектура
 
-Traefik :80/:443 → / (web) и /api, /federation (server+server2). Балансировка между server и server2. PostgreSQL, Redis, MinIO, Xray — общая инфраструктура. Другие инстансы (self-host) подключаются по федерации. Mesh: coordinator :9443, backup-receiver :9100.
+Traefik :80/:443 → / (web) и /api, /federation (server+server2). Coordinator :9443 (отдельный контейнер, не за Traefik). Балансировка между server и server2. PostgreSQL, Redis, MinIO, Xray — общая инфраструктура. Другие инстансы (self-host) подключаются по федерации. Mesh: coordinator :9443, backup-receiver :9100 (при mesh).

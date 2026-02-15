@@ -6,7 +6,7 @@ Self-host узлы получают адрес `SUBDOMAIN.MAIN_DOMAIN` (напр
 
 ## Требования
 
-- **Main** — astralrelay.online (или ваш домен) с mesh (coordinator, Traefik)
+- **Main** — astralrelay.online (или ваш домен). Coordinator (порт 9443) всегда поднимается на main вместе с Traefik.
 - **DNS** — wildcard `*.astralrelay.online` → IP главного сервера
 - **Let's Encrypt** — LETSENCRYPT_EMAIL на main для выдачи сертификатов поддоменам
 

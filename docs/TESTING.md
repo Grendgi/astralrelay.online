@@ -37,7 +37,8 @@ npx playwright test
 ## Запуск против Docker
 
 ```bash
-cd deploy/main
-docker compose up -d
-../../scripts/smoke-test.sh http://localhost  # из корня: ./scripts/smoke-test.sh
+# Из корня репозитория (main с coordinator)
+docker compose -p main -f deploy/main/docker-compose.yml -f deploy/main/docker-compose.mesh.yml --env-file deploy/main/.env up -d
+./scripts/smoke-test.sh https://YOUR_DOMAIN
+# или для локального доступа: ./scripts/smoke-test.sh http://localhost (если Traefik слушает localhost)
 ```

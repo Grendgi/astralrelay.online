@@ -21,13 +21,15 @@
 | RAM | 1 GB |
 | Диск | 5 GB |
 | Сеть | Статический IP или nip.io |
-| Порты | 80, 443 (при домене/nip.io) или 3000, 8080 (локально) |
+| Порты | 80, 443 (при домене/nip.io) или 3000, 8080 (локально); при mesh — 51820/udp, 9100 |
 
 **Без своего домена:** nip.io — введите IP, получите `1.2.3.4.nip.io`. Let's Encrypt выдаст сертификат.
 
+**При установке через `bootstrap.sh` или `install.sh`** Docker и UFW настраиваются автоматически. Ручная подготовка — только при развёртывании без этих скриптов.
+
 ---
 
-## 3. Подготовка
+## 3. Подготовка (при ручной установке)
 
 ### 3.1 Docker
 
@@ -37,7 +39,7 @@ sudo ./deploy/setup-server.sh
 
 Или: https://docs.docker.com/engine/install/
 
-### 3.2 Порты
+### 3.2 Порты (UFW)
 
 **С доменом/nip.io (Traefik):**
 ```bash
@@ -53,6 +55,8 @@ sudo ufw allow 8080/tcp
 sudo ufw enable
 ```
 
+**При подключении к mesh:** дополнительно 51820/udp (WireGuard), 9100 (backup-receiver).
+
 ---
 
 ## 4. Развёртывание
@@ -67,22 +71,20 @@ cd astralrelay.online
 sudo ./install-selfhost.sh
 ```
 
-### 4.2 Одна команда (zero config)
+### 4.2 Одна команда (bootstrap)
 
-Пользователь ничего не настраивает — всё автоматически:
+В мастере выбрать **2** (selfhost):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Grendgi/astralrelay.online/main/bootstrap.sh | sudo sh
 ```
 
-Или из репозитория в авто-режиме:
+**Автоматически:** Docker, UFW, IP→nip.io, секреты, VAPID, Traefik. Подключение к mesh (coordinator) — по желанию; при выборе «Подключить mesh» токен подтягивается с main, если доступен порт 9443. Подробнее: [RUN-SELFHOST.md](RUN-SELFHOST.md).
 
+**Без TTY (авто-режим):**
 ```bash
-git clone https://github.com/Grendgi/astralrelay.online.git && cd astralrelay.online
-INSTALL_AUTO=1 sudo ./install.sh
+INSTALL_AUTO=1 INSTALL_MODE=selfhost sudo ./install.sh
 ```
-
-**Автоматически:** Docker, IP→nip.io, все секреты, VAPID, Traefik. Без вопросов.
 
 ### 4.3 Универсальный install.sh
 
@@ -186,7 +188,7 @@ https://YOUR_DOMAIN/.well-known/federation
 
 Пользователи с главного сервера и других self-host могут общаться с `@user:YOUR_DOMAIN`.
 
-**main_only** (по умолчанию): общение только через главный хаб. **mTLS**: при mesh join `setup-mesh.sh` получает клиентский сертификат и записывает `FEDERATION_MTLS_CLIENT_CERT/KEY` в `.env`. Защита федерации: [FEDERATION-SECURITY.md](FEDERATION-SECURITY.md).
+**main_only** (по умолчанию): общение только через главный хаб. **mTLS**: при mesh join `scripts/setup-mesh.sh` получает клиентский сертификат и записывает `FEDERATION_MTLS_CLIENT_CERT/KEY` в `.env`. Токен и URL coordinator сохраняются в `.env` как `MESH_JOIN_TOKEN` и `COORDINATOR_URL`. Защита федерации: [FEDERATION-SECURITY.md](FEDERATION-SECURITY.md).
 
 ---
 

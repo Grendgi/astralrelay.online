@@ -8,11 +8,14 @@
 
 | Документ | Описание |
 |----------|----------|
+| [RUN-MAIN](./RUN-MAIN.md) | **Быстрый старт Main** — bootstrap/install, порты, Cloudflare, mesh |
+| [RUN-SELFHOST](./RUN-SELFHOST.md) | **Быстрый старт Self-host** — bootstrap/install, mesh, JOIN_TOKEN |
 | [SETUP-MAIN](./SETUP-MAIN.md) | **Главный сервер** — полная инструкция |
 | [SETUP-SELFHOST](./SETUP-SELFHOST.md) | **Self-host** — расширение сети, nip.io |
 | [SETUP-SERVER](../deploy/SETUP-SERVER.md) | Docker с нуля |
-| [RUN-DEV](./RUN-DEV.md) | Dev |
-| [install-selfhost.sh](../install-selfhost.sh) | Установка только self-host (main один) |
+| [RUN-DEV](./RUN-DEV.md) | Режим разработки |
+| [bootstrap.sh](../bootstrap.sh) | Установка в один клик: `curl ... \| sudo sh` |
+| [install-selfhost.sh](../install-selfhost.sh) | Только self-host (без выбора main/selfhost) |
 
 ### Архитектура и развёртывание
 

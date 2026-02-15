@@ -6,24 +6,25 @@
 
 ## Быстрый старт
 
-**Только self-host** (рекомендуется, main один):
+**Одна команда** (main или selfhost, в мастере выбрать 1 или 2):
+```bash
+curl -fsSL https://raw.githubusercontent.com/Grendgi/astralrelay.online/main/bootstrap.sh | sudo sh
+```
+Docker, UFW, секреты, nip.io — автоматически. Подробнее: [RUN-MAIN.md](RUN-MAIN.md), [RUN-SELFHOST.md](RUN-SELFHOST.md).
+
+**Только self-host** (без выбора main/selfhost):
 ```bash
 git clone https://github.com/Grendgi/astralrelay.online.git
 cd astralrelay.online
 sudo ./install-selfhost.sh
 ```
 
-**Main или self-host** (универсальный скрипт):
+**Универсальный install.sh** (из клона):
 ```bash
 sudo ./install.sh
 ```
 
-**install.sh** спрашивает:
-1. Режим: main (hub) или selfhost
-2. Домен/IP: введите IP → будет `1.2.3.4.nip.io`, или свой домен, или localhost
-3. Email для Let's Encrypt (при домене/nip.io)
-
-Генерирует секреты, создаёт `.env`, запускает. С nip.io — HTTPS и федерация без покупки домена.
+Мастер спрашивает: режим (main/selfhost/update), домен/IP (IP → `1.2.3.4.nip.io`), email для Let's Encrypt, подключение к mesh. Секреты генерируются автоматически. С nip.io — HTTPS и федерация без покупки домена.
 
 ---
 
@@ -128,12 +129,18 @@ docker compose -p selfhost logs -f cloudflared  # URL вида xxx.trycloudflare
 
 ## Без git (curl)
 
-Если git недоступен:
+Рекомендуемый способ — bootstrap (не требует git):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Grendgi/astralrelay.online/main/bootstrap.sh | sudo sh
+```
+
+Альтернатива (архив + install):
 
 ```bash
 curl -fsSL https://github.com/Grendgi/astralrelay.online/archive/main.tar.gz | tar xz
 cd astralrelay.online-main
-./install.sh
+sudo ./install.sh
 ```
 
 ---
@@ -170,7 +177,7 @@ docker compose -p main -f deploy/main/docker-compose.yml --env-file deploy/main/
 - **Хаб** — основной домен, через него входят пользователи без своего сервера. HA для отказоустойчивости.
 - **Самохостинг** — ваш инстанс, расширяет сеть, федерация с хабом и другими.
 
-Подробнее: [SETUP-MAIN.md](SETUP-MAIN.md), [SETUP-SELFHOST.md](SETUP-SELFHOST.md)
+Подробнее: [RUN-MAIN.md](RUN-MAIN.md), [RUN-SELFHOST.md](RUN-SELFHOST.md), [SETUP-MAIN.md](SETUP-MAIN.md), [SETUP-SELFHOST.md](SETUP-SELFHOST.md)
 
 ---
 
