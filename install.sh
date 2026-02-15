@@ -406,6 +406,17 @@ set_if_missing "POSTGRES_PASSWORD" "$(rand_base64_urlsafe 24)" "$ENV_FILE"
 set_if_missing "MINIO_ROOT_PASSWORD" "$(rand_base64_urlsafe 24)" "$ENV_FILE"
 set_if_missing "DB_ENCRYPTION_KEY" "$(rand_base64 32)" "$ENV_FILE"
 
+# MAIN: если пароль Postgres содержит / или + — ломается DATABASE_URL; заменяем на url-safe
+FIX_PG_PASSWORD=""
+if [ "$MODE" = "main" ]; then
+  pg_pass="$(get_env POSTGRES_PASSWORD "$ENV_FILE")"
+  if [ -n "$pg_pass" ] && (echo "$pg_pass" | grep -q '[+/]'); then
+    new_pg="$(rand_base64_urlsafe 24)"
+    update_env "POSTGRES_PASSWORD" "$new_pg" "$ENV_FILE"
+    FIX_PG_PASSWORD="$new_pg"
+  fi
+fi
+
 # LetsEncrypt email (если домен не localhost)
 if [ "$DOMAIN" != "localhost" ] && ! grep -q '^LETSENCRYPT_EMAIL=.' "$ENV_FILE" 2>/dev/null; then
   update_env "LETSENCRYPT_EMAIL" "admin@$DOMAIN" "$ENV_FILE"
@@ -546,11 +557,19 @@ if [ "$MODE" = "main" ]; then
 
   compose_run "main" "$files" "$ENV_FILE"
 
+  # Обновить пароль в Postgres, если заменили небезопасный (содержал / или +)
+  if [ -n "$FIX_PG_PASSWORD" ]; then
+    say "Обновление пароля Postgres (был несовместим с URL)..."
+    sleep 3
+    run_root "docker exec main-postgres-1 psql -U messenger -d messenger -c \"ALTER USER messenger PASSWORD '$FIX_PG_PASSWORD';\" 2>/dev/null" || true
+    run_root "docker restart main-server-1 main-web-1 2>/dev/null" || true
+  fi
+
   say ""
   say "=== MAIN готов ==="
   say "URL: https://$DOMAIN"
   say "Фаервол (UFW): порты 22, 80, 443, 8082, 9443 открыты."
-  say "Если 404/502: проверьте 'docker ps' (должны быть main-web-1, main-server-1) и 'docker logs main-server-1 main-web-1'."
+  say "Если 404/502: проверьте 'docker ps' и логи: docker logs main-server-1; docker logs main-web-1"
   exit 0
 fi
 
