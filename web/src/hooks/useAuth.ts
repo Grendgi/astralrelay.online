@@ -25,7 +25,7 @@ export interface StoredKeys {
   identityKey: string
   identitySecret: string
   identitySigningKey?: string
-  signedPrekey: { key: string; signature: string; secret: string }
+  signedPrekey: { key: string; signature: string; secret: string; key_id?: number }
   oneTimePrekeys: string[]
 }
 

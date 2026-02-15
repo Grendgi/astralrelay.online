@@ -69,6 +69,18 @@ export const api = {
       token,
     }),
 
+  listDevices: (token: string) =>
+    request<{ devices: Array<{ device_id: string; created_at: string; is_current: boolean }> }>('/auth/devices', { token }),
+
+  revokeDevice: (deviceId: string, token: string) =>
+    request<{ status: string }>(`/auth/devices/${encodeURIComponent(deviceId)}/revoke`, {
+      method: 'POST',
+      token,
+    }),
+
+  getKeysStatus: (token: string) =>
+    request<{ unconsumed_prekeys: number; signed_prekey_updated_at: string; next_one_time_key_id: number }>('/auth/keys/status', { token }),
+
   updateKeys: (body: { identity_signing_key?: string; signed_prekey?: { key: string; signature: string; key_id: number }; one_time_prekeys?: Array<{ key: string; key_id: number }> }, token: string) =>
     request<Record<string, never>>('/auth/keys', {
       method: 'PUT',
@@ -273,8 +285,8 @@ export const api = {
       api.getWSToken(token).then(
         (res) => {
           if (stopped) return
-          const url = `${protocol}//${window.location.host}${API_BASE}/messages/stream?as=${encodeURIComponent(recipient)}&ws_token=${encodeURIComponent(res.ws_token)}`
-          ws = new WebSocket(url)
+          const url = `${protocol}//${window.location.host}${API_BASE}/messages/stream?as=${encodeURIComponent(recipient)}`
+          ws = new WebSocket(url, ['bearer.' + res.ws_token])
           ws.onopen = () => {
             retries = 0
             onConnectionChange?.(true)

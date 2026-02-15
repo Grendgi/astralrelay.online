@@ -164,6 +164,25 @@ func (h *keysHandler) updateKeys(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{})
 }
 
+func (h *keysHandler) keysStatus(w http.ResponseWriter, r *http.Request) {
+	deviceIDStr := getDeviceID(r.Context())
+	deviceID, err := uuid.Parse(deviceIDStr)
+	if err != nil || deviceID == uuid.Nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid device")
+		return
+	}
+	st, err := h.keydir.GetKeyStatus(r.Context(), deviceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"unconsumed_prekeys":       st.UnconsumedPrekeys,
+		"signed_prekey_updated_at": st.SignedPrekeyUpdatedAt,
+		"next_one_time_key_id":     st.NextOneTimePrekeyKeyID,
+	})
+}
+
 func (h *keysHandler) getBundle(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "userID")
 	deviceID := chi.URLParam(r, "deviceID")

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/messenger/server/internal/auth"
 )
@@ -193,6 +194,54 @@ func (h *authHandler) wsToken(w http.ResponseWriter, r *http.Request) {
 		"ws_token":   wsToken,
 		"expires_in": auth.WSTokenExpirySec(),
 	})
+}
+
+func (h *authHandler) listDevices(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r.Context())
+	deviceIDStr := getDeviceID(r.Context())
+	if userID == 0 || deviceIDStr == "" {
+		writeError(w, http.StatusUnauthorized, "missing_context", "Auth required")
+		return
+	}
+	deviceID, err := uuid.Parse(deviceIDStr)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Invalid device")
+		return
+	}
+	devices, err := h.auth.ListDevices(r.Context(), userID, deviceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	type dev struct {
+		DeviceID  string `json:"device_id"`
+		CreatedAt string `json:"created_at"`
+		IsCurrent bool   `json:"is_current"`
+	}
+	out := make([]dev, len(devices))
+	for i, d := range devices {
+		out[i] = dev{DeviceID: d.DeviceID, CreatedAt: d.CreatedAt.Format("2006-01-02 15:04"), IsCurrent: d.IsCurrent}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"devices": out})
+}
+
+func (h *authHandler) revokeDevice(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r.Context())
+	deviceIDStr := chi.URLParam(r, "deviceID")
+	if userID == 0 || deviceIDStr == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "deviceID required")
+		return
+	}
+	deviceID, err := uuid.Parse(deviceIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid device_id")
+		return
+	}
+	if err := h.auth.RevokeDevice(r.Context(), userID, deviceID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok"})
 }
 
 func (h *authHandler) logout(w http.ResponseWriter, r *http.Request) {

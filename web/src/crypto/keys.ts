@@ -32,3 +32,13 @@ export async function generateKeys() {
     oneTimePrekeys,
   }
 }
+
+/** Generate one-time prekeys for replenishment (count, starting key_id). */
+export function generateOneTimePrekeys(count: number, startKeyId: number): Array<{ key: string; key_id: number }> {
+  const out: Array<{ key: string; key_id: number }> = []
+  for (let i = 0; i < count; i++) {
+    const kp = nacl.box.keyPair()
+    out.push({ key: encodeBase64(kp.publicKey), key_id: startKeyId + i })
+  }
+  return out
+}

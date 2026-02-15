@@ -37,7 +37,7 @@
 
 - **Только HTTPS** в продакшене
 - **HSTS** ✓ — включено в deploy/main (Traefik: stsSeconds=31536000, stsIncludeSubdomains, stsPreload)
-- **Security headers** ✓ — X-Content-Type-Options: nosniff, X-Frame-Options: DENY, Referrer-Policy
+- **Security headers** ✓ — X-Content-Type-Options: nosniff, X-Frame-Options: DENY, Referrer-Policy, Content-Security-Policy
 - **Ограничение запросов** — rate limiting на API
 - **Федерация** ✓ — rate limit по домену, blocklist/allowlist, mTLS, webhook-алерты. См. [FEDERATION-SECURITY.md](./FEDERATION-SECURITY.md), [WAF.md](./WAF.md)
 
@@ -59,7 +59,7 @@
 
 ### 6. Traefik: query string не в access logs
 
-WebSocket использует `ws_token` в query (`/messages/stream?ws_token=...`). Чтобы токен не попал в логи:
+WebSocket передаёт `ws_token` через Sec-WebSocket-Protocol (subprotocol `bearer.TOKEN`), не в query. Раньше был query — если логируют path, токен мог попасть в логи.
 
 **Вариант A (рекомендуется):** не включать access logs. По умолчанию при отсутствии секции `accessLog` в traefik.yml access logs могут не писаться.
 
@@ -74,6 +74,20 @@ accessLog:
 ```
 
 **Вариант C:** для роута `/api/v1/messages/stream` отключить логи через `observability.accessLogs=false` в динамической конфигурации (требует отдельного роутера).
+
+### 8. Content-Security-Policy (CSP) — защита от XSS
+
+CSP ограничивает источники скриптов, стилей и других ресурсов, снижая риск XSS и утечки E2EE-данных.
+
+**Реализовано:**
+- CSP задаётся в Traefik (secure-headers) и в `index.html` (meta fallback)
+- `script-src 'self'` — без inline-скриптов (тема инициализируется в main.tsx)
+- `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com` — React inline styles, Google Fonts
+- `connect-src 'self' ws: wss:` — API и WebSocket
+- `img-src 'self' data: blob:` — изображения, превью файлов
+- `frame-ancestors 'none'` — запрет встраивания в iframe
+
+**Рекомендации:** не логировать plaintext в `console.*`, санитизировать пользовательский контент.
 
 ## Чеклист перед продакшеном
 

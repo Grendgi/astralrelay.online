@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/websocket"
 	"github.com/messenger/server/internal/stream"
@@ -19,10 +20,24 @@ type streamHandler struct {
 	domain string
 }
 
+// extractWSToken reads ws_token from Sec-WebSocket-Protocol (bearer.TOKEN) or query param (fallback).
+func extractWSToken(r *http.Request) string {
+	if s := r.URL.Query().Get("ws_token"); s != "" {
+		return s
+	}
+	for _, p := range strings.Split(r.Header.Get("Sec-WebSocket-Protocol"), ",") {
+		p = strings.TrimSpace(p)
+		if strings.HasPrefix(p, "bearer.") && len(p) > 7 {
+			return p[7:]
+		}
+	}
+	return ""
+}
+
 func (h *streamHandler) serveWs(w http.ResponseWriter, r *http.Request) {
-	wsToken := r.URL.Query().Get("ws_token")
+	wsToken := extractWSToken(r)
 	if wsToken == "" {
-		writeError(w, http.StatusUnauthorized, "missing_token", "ws_token required")
+		writeError(w, http.StatusUnauthorized, "missing_token", "ws_token required (Sec-WebSocket-Protocol: bearer.TOKEN or query param)")
 		return
 	}
 	userID, _, err := h.auth.ValidateWSToken(wsToken)
@@ -38,7 +53,11 @@ func (h *streamHandler) serveWs(w http.ResponseWriter, r *http.Request) {
 
 	username, _ := h.auth.GetUsername(r.Context(), userID)
 	userAddr := "@" + username + ":" + h.domain
-	conn, err := upgrader.Upgrade(w, r, nil)
+	respHeader := http.Header{}
+	if r.Header.Get("Sec-WebSocket-Protocol") != "" {
+		respHeader.Set("Sec-WebSocket-Protocol", "bearer."+wsToken)
+	}
+	conn, err := upgrader.Upgrade(w, r, respHeader)
 	if err != nil {
 		return
 	}

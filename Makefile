@@ -1,6 +1,10 @@
 # AstralRelay — единая точка входа для разработки и сборки
 
-.PHONY: dev up down fmt lint migrate clean build
+.PHONY: dev up down fmt lint deps migrate clean build
+
+# Install web dependencies (required for make lint / make build)
+deps:
+	cd web && npm install
 
 # Dev: поднять compose (миграции выполняются при старте server)
 dev:

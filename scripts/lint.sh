@@ -21,7 +21,7 @@ if [ -d web/node_modules ]; then
   echo "==> Web: npm run lint"
   (cd web && npm run lint) || err=1
 else
-  echo "==> Web: npm ci required (skip lint)"
+  echo "==> Web: run 'make deps' first (skip lint)"
 fi
 
 [ $err -eq 0 ] && echo "==> Lint OK" || exit 1

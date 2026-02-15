@@ -308,7 +308,10 @@ const filePreviewStyles: Record<string, React.CSSProperties> = {
 import { encrypt, decrypt, isE2EEPayload } from '../crypto/e2ee'
 import { computeSafetyNumber } from '../crypto/fingerprint'
 import { signalEncrypt, signalDecrypt, isSignalCiphertext, uuidToSignalDeviceId } from '../crypto/signal'
+import { getE2EEMode, setE2EEMode, type E2EEMode } from '../crypto/e2ee-mode'
+import { getStoredIdentityKey, setStoredIdentityKey, checkIdentityKeyChange } from '../crypto/trusted-keys'
 import { createBackup, restoreBackup } from '../crypto/backup'
+import { generateOneTimePrekeys } from '../crypto/keys'
 import { useTheme } from '../hooks/useTheme'
 
 function decodeBase64ToBytes(b64: string): Uint8Array {
@@ -378,12 +381,15 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
   const [inviteUsername, setInviteUsername] = useState('')
   const [inviteLoading, setInviteLoading] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
-  const [mainView, setMainView] = useState<'chats' | 'vpn'>(() => (sessionStorage.getItem('main_view') as 'chats' | 'vpn') || 'chats')
+  const [mainView, setMainView] = useState<'chats' | 'vpn' | 'devices'>(() => (sessionStorage.getItem('main_view') as 'chats' | 'vpn' | 'devices') || 'chats')
   useEffect(() => {
     sessionStorage.setItem('main_view', mainView)
   }, [mainView])
   const [leaveLoading, setLeaveLoading] = useState(false)
   const [roomActionLoading, setRoomActionLoading] = useState<string | null>(null)
+  const [devices, setDevices] = useState<Array<{ device_id: string; created_at: string; is_current: boolean }>>([])
+  const [devicesLoading, setDevicesLoading] = useState(false)
+  const [devicesRevokeLoading, setDevicesRevokeLoading] = useState<string | null>(null)
   const [soundEnabled, setSoundEnabled] = useState(() => {
     try {
       return localStorage.getItem('chat_sound_enabled') !== 'false'
@@ -394,6 +400,12 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
   const [decryptedSignal, setDecryptedSignal] = useState<Record<string, string>>({})
   const [fingerprintModal, setFingerprintModal] = useState<{ recipient: string; safetyNumber: string } | null>(null)
   const [fingerprintLoading, setFingerprintLoading] = useState(false)
+  const [e2eeMode, setE2eeModeState] = useState<E2EEMode>(() => getE2EEMode())
+  const setE2eeMode = (m: E2EEMode) => {
+    setE2eeModeState(m)
+    setE2EEMode(m)
+  }
+  const [identityKeyChanged, setIdentityKeyChanged] = useState<{ recipient: string; newKey: string } | null>(null)
   useEffect(() => {
     if ('serviceWorker' in navigator && 'PushManager' in window && Notification.permission === 'granted') {
       navigator.serviceWorker.ready.then((reg) => {
@@ -420,6 +432,12 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
     return () => window.removeEventListener('keydown', onKey)
   }, [fingerprintModal])
 
+  const trustNewKey = useCallback(() => {
+    if (!identityKeyChanged) return
+    setStoredIdentityKey(identityKeyChanged.recipient, identityKeyChanged.newKey)
+    setIdentityKeyChanged(null)
+  }, [identityKeyChanged])
+
   const showFingerprint = useCallback(async () => {
     const r = normalizeRecipient(recipient, user.user_id)
     if (!r || isRoomAddr(r) || !keys) return
@@ -434,6 +452,31 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
     } finally {
       setFingerprintLoading(false)
     }
+  }, [recipient, user.user_id, keys, token])
+
+  // Check for identity key change when opening DM (уведомления при смене ключей)
+  useEffect(() => {
+    const r = normalizeRecipient(recipient, user.user_id)
+    if (!r || isRoomAddr(r) || !keys || !token) {
+      setIdentityKeyChanged(null)
+      return
+    }
+    let cancelled = false
+    api.getKeys(r, token)
+      .then((bundle) => {
+        if (cancelled) return
+        const res = checkIdentityKeyChange(r, bundle.identity_key)
+        if (res.changed) {
+          setIdentityKeyChanged({ recipient: r, newKey: bundle.identity_key })
+        } else {
+          setIdentityKeyChanged(null)
+          if (!getStoredIdentityKey(r)) setStoredIdentityKey(r, bundle.identity_key)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setIdentityKeyChanged(null)
+      })
+    return () => { cancelled = true }
   }, [recipient, user.user_id, keys, token])
 
   useEffect(() => {
@@ -481,6 +524,32 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
     const id = setInterval(sync, 5000)
     return () => clearInterval(id)
   }, [sync])
+
+  useEffect(() => {
+    if (mainView === 'devices' && token) {
+      setDevicesLoading(true)
+      api.listDevices(token)
+        .then((r) => setDevices(r.devices))
+        .catch(() => setDevices([]))
+        .finally(() => setDevicesLoading(false))
+    }
+  }, [mainView, token])
+
+  // One-time prekey replenishment: when unconsumed < 20, upload more
+  const REPLENISH_THRESHOLD = 20
+  const REPLENISH_COUNT = 50
+  useEffect(() => {
+    if (!keys || !token) return
+    let cancelled = false
+    api.getKeysStatus(token)
+      .then((st) => {
+        if (cancelled || st.unconsumed_prekeys >= REPLENISH_THRESHOLD) return
+        const newPrekeys = generateOneTimePrekeys(REPLENISH_COUNT, st.next_one_time_key_id)
+        return api.updateKeys({ one_time_prekeys: newPrekeys }, token)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [keys, token])
 
   useEffect(() => {
     if (!recipient) {
@@ -876,6 +945,19 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
     }
   }
 
+  const encryptDM = async (
+    plaintext: string,
+    bundle: Parameters<typeof signalEncrypt>[1],
+    ourKeys: StoredKeys,
+    addr: string,
+    deviceId?: number
+  ): Promise<string> => {
+    if (e2eeMode === 'strict') {
+      return signalEncrypt(plaintext, bundle, ourKeys, addr, deviceId)
+    }
+    return signalEncrypt(plaintext, bundle, ourKeys, addr, deviceId).catch(() => encrypt(plaintext, bundle))
+  }
+
   const encryptForRoom = async (roomAddr: string, payload: string): Promise<Record<string, string> | null> => {
     if (!keys) return null
     const roomId = roomAddr.startsWith('!') ? roomAddr.slice(1).split(':')[0] : ''
@@ -896,6 +978,11 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
   const sendFile = async (file: File) => {
     if (!recipient) return
     const r = normalizeRecipient(recipient, user.user_id)
+    if (identityKeyChanged && identityKeyChanged.recipient === r && e2eeMode === 'strict') {
+      setSendHint('Ключ собеседника изменился — подтвердите новый ключ перед отправкой')
+      setSendHintError(true)
+      return
+    }
     setSendHint(null)
     setSendHintError(false)
     try {
@@ -914,10 +1001,9 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
       } else if (keys && !isRoom) {
         try {
           const bundle = await api.getKeys(r, token)
-          const ourKeys = { identityKey: keys.identityKey, identitySecret: keys.identitySecret, signedPrekey: keys.signedPrekey }
-          const ctRecipient = await signalEncrypt(payload, bundle, ourKeys, r).catch(() => encrypt(payload, bundle))
           const selfBundle = { identity_key: keys.identityKey, signed_prekey: { key: keys.signedPrekey.key, signature: keys.signedPrekey.signature, key_id: keys.signedPrekey.key_id ?? 1 } }
-          const ctSelf = await signalEncrypt(payload, selfBundle, ourKeys, user.user_id, uuidToSignalDeviceId(user.device_id)).catch(() => encrypt(payload, selfBundle))
+          const ctRecipient = await encryptDM(payload, bundle, keys, r)
+          const ctSelf = await encryptDM(payload, selfBundle, keys, user.user_id, uuidToSignalDeviceId(user.device_id))
           content = { ciphertexts: { [r]: ctRecipient, [user.user_id]: ctSelf }, session_id: 'sess_mvp' }
         } catch (e) {
           if (e instanceof ApiError && e.status === 404) {
@@ -925,6 +1011,13 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
             setSendHintError(true)
             return
           }
+          if (e2eeMode === 'strict' && e instanceof Error) {
+            setSendHint(`Signal недоступен: ${e.message}. Режим Strict — отключите для fallback.`)
+            setSendHintError(true)
+            return
+          }
+          setSendHint('Ключи получателя недоступны — сообщение без E2EE')
+          setSendHintError(false)
           content = { ciphertext: btoa(unescape(encodeURIComponent(payload))), session_id: 'sess_mvp' }
         }
       } else {
@@ -975,6 +1068,11 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
   const sendMessage = async () => {
     if (!recipient || !message.trim()) return
     const r = normalizeRecipient(recipient, user.user_id)
+    if (identityKeyChanged && identityKeyChanged.recipient === r && e2eeMode === 'strict') {
+      setSendHint('Ключ собеседника изменился — подтвердите новый ключ перед отправкой')
+      setSendHintError(true)
+      return
+    }
     setSendHint(null)
     setSendHintError(false)
     setSending(true)
@@ -988,14 +1086,18 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
       } else if (keys && !isRoom) {
         try {
           const bundle = await api.getKeys(r, token)
-          const ourKeys = { identityKey: keys.identityKey, identitySecret: keys.identitySecret, signedPrekey: keys.signedPrekey }
-          const ctRecipient = await signalEncrypt(plaintext, bundle, ourKeys, r).catch(() => encrypt(plaintext, bundle))
           const selfBundle = { identity_key: keys.identityKey, signed_prekey: { key: keys.signedPrekey.key, signature: keys.signedPrekey.signature, key_id: keys.signedPrekey.key_id ?? 1 } }
-          const ctSelf = await signalEncrypt(plaintext, selfBundle, ourKeys, user.user_id, uuidToSignalDeviceId(user.device_id)).catch(() => encrypt(plaintext, selfBundle))
+          const ctRecipient = await encryptDM(plaintext, bundle, keys, r)
+          const ctSelf = await encryptDM(plaintext, selfBundle, keys, user.user_id, uuidToSignalDeviceId(user.device_id))
           content = { ciphertexts: { [r]: ctRecipient, [user.user_id]: ctSelf }, session_id: 'sess_mvp' }
         } catch (e) {
           if (e instanceof ApiError && e.status === 404) {
             setSendHint('Пользователь не найден')
+            setSendHintError(true)
+            return
+          }
+          if (e2eeMode === 'strict' && e instanceof Error) {
+            setSendHint(`Signal недоступен: ${e.message}. Режим Strict — отключите для fallback.`)
             setSendHintError(true)
             return
           }
@@ -1186,6 +1288,16 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
             >
               VPN
             </button>
+            <button
+              type="button"
+              onClick={() => setMainView('devices')}
+              style={{
+                ...styles.tabBtn,
+                ...(mainView === 'devices' ? styles.tabBtnActive : {}),
+              }}
+            >
+              Устройства
+            </button>
           </div>
           {'PushManager' in window && (
             <button
@@ -1215,7 +1327,69 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
       </header>
 
       <main style={styles.main} className="chat-main">
-        {mainView === 'vpn' ? (
+        {mainView === 'devices' ? (
+          <>
+            <div style={{ ...styles.sidebar, width: 120, minWidth: 120 }}>
+              <div style={styles.sidebarSection}>
+                <button type="button" onClick={() => setMainView('chats')} style={{ ...styles.vpnBtn, width: '100%', marginTop: 8 }}>
+                  ← Чаты
+                </button>
+              </div>
+            </div>
+            <div style={{ flex: 1, padding: 24, overflow: 'auto' }}>
+              <h2 style={{ margin: '0 0 16px', fontSize: 20 }}>Мои устройства</h2>
+              <p style={{ ...styles.vpnProtoHint, marginBottom: 16 }}>Устройства, с которых вы входили в аккаунт. Удаление отзовёт сессию — устройство потребует повторного входа.</p>
+              {devicesLoading ? (
+                <p style={styles.vpnProtoHint}>Загрузка…</p>
+              ) : devices.length === 0 ? (
+                <p style={styles.vpnProtoHint}>Нет устройств</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {devices.map((d) => (
+                    <div
+                      key={d.device_id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '12px 16px',
+                        background: 'var(--bg)',
+                        borderRadius: 8,
+                        border: d.is_current ? '1px solid var(--accent)' : '1px solid var(--border)',
+                      }}
+                    >
+                      <div>
+                        <span style={{ fontWeight: 500, fontSize: 14 }}>{d.device_id.slice(0, 8)}…{d.device_id.slice(-4)}</span>
+                        {d.is_current && <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--accent)' }}>текущее</span>}
+                        <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>Создано: {d.created_at}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (d.is_current && !window.confirm('Удалить текущее устройство? Вы выйдете из аккаунта.')) return
+                          setDevicesRevokeLoading(d.device_id)
+                          try {
+                            await api.revokeDevice(d.device_id, token)
+                            setDevices((prev) => prev.filter((x) => x.device_id !== d.device_id))
+                            if (d.is_current) onLogout()
+                          } catch (err) {
+                            console.error(err)
+                          } finally {
+                            setDevicesRevokeLoading(null)
+                          }
+                        }}
+                        disabled={devicesRevokeLoading === d.device_id}
+                        style={{ ...styles.vpnBtnDanger, padding: '6px 12px', fontSize: 12 }}
+                      >
+                        {devicesRevokeLoading === d.device_id ? '…' : 'Удалить'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        ) : mainView === 'vpn' ? (
           <>
             <div style={{ ...styles.sidebar, width: 120, minWidth: 120 }}>
               <div style={styles.sidebarSection}>
@@ -1556,15 +1730,31 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                     : `Чат с ${normalizeRecipient(recipient, user.user_id)}`}
                 </p>
                 {!isRoomAddr(normalizeRecipient(recipient, user.user_id)) && keys && (
-                  <button
-                    type="button"
-                    onClick={showFingerprint}
-                    disabled={fingerprintLoading}
-                    style={{ ...styles.themeBtn, fontSize: 12, padding: '4px 8px' }}
-                    title="Проверить ключ (Safety number)"
-                  >
-                    {fingerprintLoading ? '…' : '🔐 Отпечаток'}
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setE2eeMode(e2eeMode === 'strict' ? 'compatibility' : 'strict')}
+                      style={{
+                        ...styles.themeBtn,
+                        fontSize: 12,
+                        padding: '4px 8px',
+                        opacity: e2eeMode === 'strict' ? 1 : 0.8,
+                        borderColor: e2eeMode === 'strict' ? 'var(--accent)' : undefined,
+                      }}
+                      title={e2eeMode === 'strict' ? 'Strict: только Signal, без fallback на MVP. Нажмите для Compatibility.' : 'Compatibility: при ошибке Signal — fallback на MVP. Нажмите для Strict.'}
+                    >
+                      E2EE: {e2eeMode === 'strict' ? 'Strict' : 'Compat'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={showFingerprint}
+                      disabled={fingerprintLoading}
+                      style={{ ...styles.themeBtn, fontSize: 12, padding: '4px 8px' }}
+                      title="Проверить ключ (Safety number)"
+                    >
+                      {fingerprintLoading ? '…' : '🔐 Отпечаток'}
+                    </button>
+                  </>
                 )}
                 {typingFrom && ((typingRoom && currentRecipient === typingRoom) || (!typingRoom && currentRecipient === typingFrom)) && (
                   <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>{typingFrom.replace(/^@([^:]+).*/, '$1')} печатает…</span>
@@ -1655,6 +1845,30 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                   />
                   <button style={styles.vpnBtn} onClick={handleInvite} disabled={inviteLoading || !inviteUsername.trim()}>
                     {inviteLoading ? '…' : 'Пригласить'}
+                  </button>
+                </div>
+              </div>
+            )}
+            {identityKeyChanged && identityKeyChanged.recipient === normalizeRecipient(recipient, user.user_id) && (
+              <div
+                style={{
+                  margin: '8px 0 0',
+                  padding: '10px 12px',
+                  background: 'rgba(234, 179, 8, 0.15)',
+                  border: '1px solid rgba(234, 179, 8, 0.5)',
+                  borderRadius: 8,
+                  fontSize: 13,
+                }}
+              >
+                <p style={{ margin: '0 0 8px', color: 'var(--text)' }}>
+                  ⚠️ Ключ собеседника изменился. Возможна атака или переустановка.
+                </p>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button type="button" onClick={trustNewKey} style={{ ...styles.vpnBtn, padding: '6px 12px', fontSize: 12 }}>
+                    Подтвердить новый ключ
+                  </button>
+                  <button type="button" onClick={showFingerprint} disabled={fingerprintLoading} style={{ ...styles.vpnBtn, padding: '6px 12px', fontSize: 12 }}>
+                    {fingerprintLoading ? '…' : 'Проверить отпечаток'}
                   </button>
                 </div>
               </div>

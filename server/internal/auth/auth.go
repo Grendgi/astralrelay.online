@@ -520,9 +520,64 @@ func (s *Service) GetKeyBackup(ctx context.Context, userID int64) (salt []byte, 
 	}
 	return salt, encryptedBundle, nil
 }
-le); err != nil {
-			return nil, nil, fmt.Errorf("decrypt bundle: %w", err)
-		}
+
+// DeviceInfo describes a user device for the devices list.
+type DeviceInfo struct {
+	DeviceID  string
+	CreatedAt time.Time
+	IsCurrent bool
+}
+
+// ListDevices returns devices for the user.
+func (s *Service) ListDevices(ctx context.Context, userID int64, currentDeviceID uuid.UUID) ([]DeviceInfo, error) {
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT id, created_at FROM devices WHERE user_id = $1 ORDER BY created_at DESC`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
 	}
-	return salt, encryptedBundle, nil
+	defer rows.Close()
+	var out []DeviceInfo
+	for rows.Next() {
+		var id uuid.UUID
+		var createdAt time.Time
+		if err := rows.Scan(&id, &createdAt); err != nil {
+			return nil, err
+		}
+		out = append(out, DeviceInfo{
+			DeviceID:  id.String(),
+			CreatedAt: createdAt,
+			IsCurrent: id == currentDeviceID,
+		})
+	}
+	return out, rows.Err()
+}
+
+// RevokeDevice revokes all tokens for the device and deletes it. The device will need to re-login.
+func (s *Service) RevokeDevice(ctx context.Context, userID int64, deviceID uuid.UUID) error {
+	tag, err := s.db.Pool.Exec(ctx,
+		`UPDATE access_tokens SET revoked_at = NOW() WHERE user_id = $1 AND device_id = $2 AND revoked_at IS NULL`,
+		userID, deviceID,
+	)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Pool.Exec(ctx, `DELETE FROM devices WHERE id = $1 AND user_id = $2`, deviceID, userID)
+	if err != nil {
+		return err
+	}
+	_ = tag.RowsAffected()
+	return nil
+}
+
+// CleanupExpiredTokens removes expired and long-revoked tokens to keep the table bounded.
+func (s *Service) CleanupExpiredTokens(ctx context.Context) (deleted int64, err error) {
+	res, err := s.db.Pool.Exec(ctx,
+		`DELETE FROM access_tokens WHERE expires_at < NOW() OR (revoked_at IS NOT NULL AND revoked_at < NOW() - INTERVAL '7 days')`,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected(), nil
 }

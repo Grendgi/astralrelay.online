@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -198,6 +199,47 @@ func UUIDToSignalDeviceID(id uuid.UUID) int {
 	}
 	n := binary.BigEndian.Uint32(id[:4])
 	return int(n%16383) + 1
+}
+
+// KeyStatus holds prekey status for replenishment and rotation checks.
+type KeyStatus struct {
+	UnconsumedPrekeys       int
+	SignedPrekeyUpdatedAt   string // RFC3339
+	NextOneTimePrekeyKeyID  int64  // next key_id to use for replenishment (max+1)
+}
+
+// GetKeyStatus returns prekey status for the device (for replenishment/rotation).
+func (s *Service) GetKeyStatus(ctx context.Context, deviceID uuid.UUID) (*KeyStatus, error) {
+	var unconsumed int
+	err := s.db.Pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM one_time_prekeys WHERE device_id = $1 AND consumed_at IS NULL`,
+		deviceID,
+	).Scan(&unconsumed)
+	if err != nil {
+		return nil, err
+	}
+	var maxKeyID int64
+	_ = s.db.Pool.QueryRow(ctx,
+		`SELECT COALESCE(MAX(key_id), 0) FROM one_time_prekeys WHERE device_id = $1`,
+		deviceID,
+	).Scan(&maxKeyID)
+	nextKeyID := maxKeyID + 1
+	if nextKeyID < 1 {
+		nextKeyID = 1
+	}
+	var updatedAt time.Time
+	err = s.db.Pool.QueryRow(ctx, `SELECT updated_at FROM devices WHERE id = $1`, deviceID).Scan(&updatedAt)
+	if err == pgx.ErrNoRows {
+		return &KeyStatus{UnconsumedPrekeys: unconsumed, NextOneTimePrekeyKeyID: nextKeyID}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &KeyStatus{
+		UnconsumedPrekeys:      unconsumed,
+		SignedPrekeyUpdatedAt:  updatedAt.UTC().Format(time.RFC3339),
+		NextOneTimePrekeyKeyID: nextKeyID,
+	}, nil
 }
 
 // MaxOneTimePrekeysPerDevice limits one-time prekeys per device (protocol recommends 100–500).
