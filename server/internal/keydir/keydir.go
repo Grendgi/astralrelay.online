@@ -120,6 +120,39 @@ func (s *Service) GetBundle(ctx context.Context, userID, deviceID string) (*Bund
 	return b, nil
 }
 
+// ListDevicesForUser returns device IDs for a user (same domain). Used for multi-device delivery.
+func (s *Service) ListDevicesForUser(ctx context.Context, userID string) ([]string, error) {
+	userID = strings.TrimSpace(userID)
+	username := strings.TrimPrefix(userID, "@")
+	if idx := strings.Index(username, ":"); idx >= 0 {
+		username = username[:idx]
+	}
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return nil, ErrInvalidUserID
+	}
+	rows, err := s.db.Pool.Query(ctx,
+		`SELECT d.id FROM devices d
+		 JOIN users u ON u.id = d.user_id
+		 WHERE LOWER(u.username) = LOWER($1) AND (u.domain = $2 OR (u.domain IN ('localhost','127.0.0.1') AND $2 IN ('localhost','127.0.0.1')))
+		 ORDER BY d.created_at ASC`,
+		username, s.dom,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id.String())
+	}
+	return ids, rows.Err()
+}
+
 // GetBundleForUser returns prekey bundle for the first device of a user.
 // Used for MVP 1:1 when recipient's device_id is unknown.
 // Username is unique, domain is ignored — accepts @user:domain or plain username.

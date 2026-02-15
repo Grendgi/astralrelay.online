@@ -107,6 +107,7 @@ func NewRouter(
 			r.Put("/auth/keys", keysH.updateKeys)
 			r.Get("/keys/bundle/{userID}", keysH.getBundleForUser)
 			r.Get("/keys/bundle/{userID}/{deviceID}", keysH.getBundle)
+			r.Get("/keys/devices/{userID}", keysH.listDevicesForUser)
 			r.With(LimitByUser(60, time.Minute)).Post("/messages/send", relayH.send)
 			r.Post("/messages/typing", relayH.typing)
 			r.Post("/messages/read", relayH.read)

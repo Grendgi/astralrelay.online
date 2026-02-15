@@ -78,6 +78,31 @@ export function decrypt(ciphertextB64: string, identitySecret: Uint8Array, signe
   return encodeUTF8(plain)
 }
 
+/** Encrypt attachment (file) with CEK+nonce. Returns ciphertext + fileKey + nonce. */
+export async function encryptAttachment(plaintext: Uint8Array): Promise<{
+  ciphertext: Uint8Array
+  fileKey: string
+  nonce: string
+}> {
+  const key = nacl.randomBytes(nacl.secretbox.keyLength)
+  const nonce = nacl.randomBytes(nacl.secretbox.nonceLength)
+  const ciphertext = nacl.secretbox(plaintext, nonce, key)
+  return { ciphertext, fileKey: encodeBase64(key), nonce: encodeBase64(nonce) }
+}
+
+/** Decrypt attachment with file_key + nonce. */
+export function decryptAttachment(
+  ciphertext: Uint8Array,
+  fileKeyB64: string,
+  nonceB64: string
+): Uint8Array {
+  const key = decodeBase64(fileKeyB64)
+  const nonce = decodeBase64(nonceB64)
+  const plain = nacl.secretbox.open(ciphertext, nonce, key)
+  if (!plain) throw new Error('Attachment decryption failed')
+  return plain
+}
+
 /** Detect if ciphertext is our E2EE format vs legacy base64 */
 export function isE2EEPayload(s: string): boolean {
   try {

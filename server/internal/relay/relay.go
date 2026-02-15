@@ -278,7 +278,12 @@ func (s *Service) Sync(ctx context.Context, recipientUserID int64, deviceID uuid
 		if len(ciphertextsRaw) > 0 {
 			var ciphertexts map[string]string
 			if json.Unmarshal(ciphertextsRaw, &ciphertexts) == nil {
-				if ct, ok := ciphertexts[recipientAddr]; ok && ct != "" {
+				deviceKey := recipientAddr + ":" + deviceID.String()
+				if ct, ok := ciphertexts[deviceKey]; ok && ct != "" {
+					if dec, err := base64.StdEncoding.DecodeString(ct); err == nil {
+						e.Ciphertext = dec
+					}
+				} else if ct, ok := ciphertexts[recipientAddr]; ok && ct != "" {
 					if dec, err := base64.StdEncoding.DecodeString(ct); err == nil {
 						e.Ciphertext = dec
 					}

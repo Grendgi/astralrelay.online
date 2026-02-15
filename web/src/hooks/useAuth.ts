@@ -1,7 +1,9 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { api } from '../api/client'
-import { generateKeys } from '../crypto/keys'
+import { generateKeys, generateSignedPrekey } from '../crypto/keys'
 import { createBackup } from '../crypto/backup'
+import { getKeysFromStorage, setKeysInStorage, clearKeysFromStorage, migrateKeysFromLocalStorage, mergeOtpksToStorage, updateSignedPrekeyInStorage } from '../crypto/key-storage'
+import { initTrustedKeysStorage } from '../crypto/trusted-keys-storage'
 
 function randomUUID(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -21,12 +23,19 @@ export interface AuthUser {
   device_id: string
 }
 
+export interface OneTimePrekeyEntry {
+  key_id: number
+  pub: string
+  priv: string
+}
+
 export interface StoredKeys {
   identityKey: string
   identitySecret: string
   identitySigningKey?: string
+  identitySigningSecret?: string
   signedPrekey: { key: string; signature: string; secret: string; key_id?: number }
-  oneTimePrekeys: string[]
+  oneTimePrekeys: OneTimePrekeyEntry[]
 }
 
 export function useAuth() {
@@ -37,14 +46,22 @@ export function useAuth() {
   const [token, setToken] = useState<string | null>(() =>
     localStorage.getItem('token')
   )
-  const keys = user ? ((): StoredKeys | null => {
-    try {
-      const k = localStorage.getItem('keys')
-      return k ? JSON.parse(k) : null
-    } catch {
-      return null
+  const [keys, setKeys] = useState<StoredKeys | null>(null)
+
+  useEffect(() => {
+    if (!user) {
+      setKeys(null)
+      return
     }
-  })() : null
+    let cancelled = false
+    ;(async () => {
+      await initTrustedKeysStorage()
+      const migrated = await migrateKeysFromLocalStorage()
+      const k = migrated ?? (await getKeysFromStorage())
+      if (!cancelled) setKeys(k)
+    })()
+    return () => { cancelled = true }
+  }, [user])
 
   const register = useCallback(
     async (username: string, password: string) => {
@@ -57,7 +74,7 @@ export function useAuth() {
           identityKey: keys.identityKey,
           identitySecret: keys.identitySecret,
           signedPrekey: keys.signedPrekey,
-          oneTimePrekeys: keys.oneTimePrekeys,
+          oneTimePrekeys: keys.oneTimePrekeys.map((o) => o.pub),
         },
         password,
         saltB64
@@ -73,9 +90,9 @@ export function useAuth() {
             signature: keys.signedPrekey.signature,
             key_id: keys.signedPrekey.key_id ?? 1,
           },
-          one_time_prekeys: keys.oneTimePrekeys.slice(0, 5).map((k, i) => ({
-            key: k,
-            key_id: i + 1,
+          one_time_prekeys: keys.oneTimePrekeys.slice(0, 5).map((o) => ({
+            key: o.pub,
+            key_id: o.key_id,
           })),
         },
         keys_backup: { salt: saltB64, blob: keysBackupBlob },
@@ -83,15 +100,18 @@ export function useAuth() {
       localStorage.setItem('user', JSON.stringify({ user_id: res.user_id, device_id: res.device_id }))
       localStorage.setItem('device_id', res.device_id)
       localStorage.setItem('token', res.access_token)
-      localStorage.setItem('keys', JSON.stringify({
+      const stored: StoredKeys = {
         identityKey: keys.identityKey,
         identitySecret: keys.identitySecret,
         identitySigningKey: keys.identitySigningKey,
+        ...('identitySigningSecret' in keys && { identitySigningSecret: (keys as { identitySigningSecret: string }).identitySigningSecret }),
         signedPrekey: keys.signedPrekey,
         oneTimePrekeys: keys.oneTimePrekeys,
-      }))
+      }
+      await setKeysInStorage(stored)
       setUser({ user_id: res.user_id, device_id: res.device_id })
       setToken(res.access_token)
+      setKeys(stored)
     },
     []
   )
@@ -99,18 +119,12 @@ export function useAuth() {
   const login = useCallback(
     async (username: string, password: string) => {
       const storedDeviceId = localStorage.getItem('device_id')
-      const storedKeys = (() => {
-        try {
-          const k = localStorage.getItem('keys')
-          return k ? JSON.parse(k) : null
-        } catch {
-          return null
-        }
-      })()
+      const migrated = await migrateKeysFromLocalStorage()
+      const storedKeys = migrated ?? (await getKeysFromStorage())
       const isNewDevice = !storedDeviceId
       const needKeysRestore = !storedKeys
       const devId = storedDeviceId || randomUUID()
-      let keys: { identityKey: string; identitySecret: string; signedPrekey: { key: string; signature: string; secret: string; key_id?: number }; oneTimePrekeys: string[] } | null = null
+      let keys: { identityKey: string; identitySecret: string; signedPrekey: { key: string; signature: string; secret: string; key_id?: number }; oneTimePrekeys: OneTimePrekeyEntry[] } | null = null
       if (isNewDevice && !needKeysRestore) {
         keys = (await generateKeys()) as any
       }
@@ -124,7 +138,7 @@ export function useAuth() {
         body.keys = {
           identity_key: keys.identityKey,
           signed_prekey: { key: keys.signedPrekey.key, signature: keys.signedPrekey.signature, key_id: keys.signedPrekey.key_id ?? 1 },
-          one_time_prekeys: keys.oneTimePrekeys.slice(0, 5).map((k, i) => ({ key: k, key_id: i + 1 })),
+          one_time_prekeys: keys.oneTimePrekeys.slice(0, 5).map((o) => ({ key: o.pub, key_id: o.key_id })),
         }
       }
       const res = await api.login(body)
@@ -132,18 +146,26 @@ export function useAuth() {
       localStorage.setItem('device_id', res.device_id)
       localStorage.setItem('token', res.access_token)
       if (keys) {
-        localStorage.setItem('keys', JSON.stringify(keys))
+        const stored: StoredKeys = {
+          ...keys,
+          oneTimePrekeys: keys.oneTimePrekeys,
+          ...('identitySigningSecret' in keys && { identitySigningSecret: (keys as { identitySigningSecret: string }).identitySigningSecret }),
+        }
+        await setKeysInStorage(stored)
+        setKeys(stored)
       } else if (res.keys_backup && needKeysRestore) {
         try {
           const { restoreBackup } = await import('../crypto/backup')
           const restored = await restoreBackup(res.keys_backup.blob, password, res.keys_backup.salt)
-          localStorage.setItem('keys', JSON.stringify({
+          const stored: StoredKeys = {
             identityKey: restored.identityKey,
             identitySecret: restored.identitySecret,
             identitySigningKey: restored.identitySigningKey,
+            ...(restored.identitySigningSecret && { identitySigningSecret: restored.identitySigningSecret }),
             signedPrekey: restored.signedPrekey,
-            oneTimePrekeys: restored.oneTimePrekeys ?? [],
-          }))
+            oneTimePrekeys: [],
+          }
+          await setKeysInStorage(stored)
           window.location.reload()
           return
         } catch {
@@ -156,6 +178,27 @@ export function useAuth() {
     []
   )
 
+  const refreshKeys = useCallback(async () => {
+    if (!user) return
+    const k = await getKeysFromStorage()
+    setKeys(k)
+  }, [user])
+
+  const addOtpks = useCallback(async (entries: OneTimePrekeyEntry[]) => {
+    await mergeOtpksToStorage(entries)
+    const k = await getKeysFromStorage()
+    setKeys(k)
+  }, [])
+
+  const rotateSignedPrekey = useCallback(
+    async (newSignedPrekey: { key: string; signature: string; secret: string; key_id: number }) => {
+      await updateSignedPrekeyInStorage(newSignedPrekey)
+      const k = await getKeysFromStorage()
+      setKeys(k)
+    },
+    []
+  )
+
   const logout = useCallback(() => {
     const t = token
     if (t) {
@@ -164,10 +207,10 @@ export function useAuth() {
     localStorage.removeItem('user')
     localStorage.removeItem('token')
     localStorage.removeItem('device_id')
-    localStorage.removeItem('keys')
+    clearKeysFromStorage().catch(() => {})
     setUser(null)
     setToken(null)
   }, [token])
 
-  return { user, token, keys, register, login, logout }
+  return { user, token, keys, register, login, logout, refreshKeys, addOtpks, rotateSignedPrekey }
 }

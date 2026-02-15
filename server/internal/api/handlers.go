@@ -224,6 +224,31 @@ func (h *keysHandler) getBundle(w http.ResponseWriter, r *http.Request) {
 	h.writeBundle(w, bundle, "")
 }
 
+func (h *keysHandler) listDevicesForUser(w http.ResponseWriter, r *http.Request) {
+	userID := chi.URLParam(r, "userID")
+	if userID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "userID required")
+		return
+	}
+	if d, err := url.PathUnescape(userID); err == nil {
+		userID = d
+	}
+	deviceIDs, err := h.keydir.ListDevicesForUser(r.Context(), userID)
+	if err == keydir.ErrInvalidUserID {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid userID")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	devices := make([]map[string]string, 0, len(deviceIDs))
+	for _, id := range deviceIDs {
+		devices = append(devices, map[string]string{"device_id": id})
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"devices": devices})
+}
+
 func (h *relayHandler) send(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Type      string `json:"type"`

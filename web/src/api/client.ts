@@ -96,6 +96,12 @@ export const api = {
       { token }
     ),
 
+  getRecipientDevices: (userID: string, token: string) =>
+    request<{ devices: Array<{ device_id: string }> }>(
+      `/keys/devices/${encodeURIComponent(userID)}`,
+      { token }
+    ),
+
   sendMessage: (body: SendMessageRequest, token: string, idempotencyKey?: string) =>
     request<SendMessageResponse>('/messages/send', {
       method: 'POST',
@@ -117,7 +123,7 @@ export const api = {
     throw new ApiError('Sync failed after retries', 503)
   },
 
-  uploadFile: (file: File, token: string) => {
+  uploadFile: (file: File | Blob, token: string) => {
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/octet-stream',

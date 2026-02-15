@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
+import './Chat.css'
 import { api, ApiError, type SyncEvent } from '../api/client'
 import type { AuthUser, StoredKeys } from '../hooks/useAuth'
+import { setKeysInStorage } from '../crypto/key-storage'
 
 const IMAGE_EXTS = /\.(jpe?g|png|gif|webp|bmp|svg)(\?|$)/i
 
@@ -40,6 +42,8 @@ function FilePreview({
   token,
   onDownload,
   lazy = true,
+  fileKey,
+  nonce,
 }: {
   contentUri: string
   filename: string
@@ -47,6 +51,8 @@ function FilePreview({
   token: string
   onDownload: () => void
   lazy?: boolean
+  fileKey?: string
+  nonce?: string
 }) {
   const [url, setUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -92,7 +98,12 @@ function FilePreview({
         if (ct.includes('text/html') || ct.includes('application/json')) {
           throw new Error('Received error page instead of file')
         }
-        const blob = await res.blob()
+        let blob: Blob = await res.blob()
+        if (fileKey && nonce) {
+          const ciphertext = new Uint8Array(await blob.arrayBuffer())
+          const plain = decryptAttachment(ciphertext, fileKey, nonce)
+          blob = new Blob([plain])
+        }
         // Браузеру нужен корректный MIME для отображения img/video (octet-stream может не рендериться)
         const ext = filename.split('.').pop()?.toLowerCase()
         const mimeMap: Record<string, string> = {
@@ -121,28 +132,28 @@ function FilePreview({
         return null
       })
     }
-  }, [contentUri, token, canPreview, filename, lazy, inView])
+  }, [contentUri, token, canPreview, filename, lazy, inView, fileKey, nonce])
 
   const sizeStr = size != null ? formatFileSize(size) : null
 
   const wrap = (children: ReactNode) => (
-    <div ref={containerRef} style={{ display: 'block', minHeight: 1 }}>
+    <div ref={containerRef} className="fp-wrap">
       {children}
     </div>
   )
 
   if (!canPreview || error) {
     return wrap(
-      <button type="button" onClick={onDownload} style={filePreviewStyles.downloadBtn}>
+      <button type="button" onClick={onDownload} className="fp-download-btn">
         📎 {filename}
-        {sizeStr && <span style={{ opacity: 0.8, fontSize: '0.9em', marginLeft: 4 }}>({sizeStr})</span>}
+        {sizeStr && <span className="fp-size">({sizeStr})</span>}
       </button>
     )
   }
 
   if (loading) {
     return wrap(
-      <div style={{ ...filePreviewStyles.downloadBtn, cursor: 'default', textDecoration: 'none' }}>
+      <div className="fp-download-btn fp-download-btn--loading">
         ⏳ Загрузка {filename}…
       </div>
     )
@@ -151,11 +162,11 @@ function FilePreview({
   if (isImage && url) {
     return wrap(
       <>
-        <div style={filePreviewStyles.preview}>
+        <div className="fp-preview">
           <img
             src={url}
             alt={filename}
-            style={filePreviewStyles.image}
+            className="fp-image"
             onClick={(e) => { e.stopPropagation(); setLightboxOpen(true) }}
             title="Клик — открыть в полном размере"
             onError={() => {
@@ -163,28 +174,28 @@ function FilePreview({
               setError(true)
             }}
           />
-          <button type="button" onClick={onDownload} style={filePreviewStyles.downloadBtn}>
+          <button type="button" onClick={onDownload} className="fp-download-btn">
             📎 {filename}
-            {sizeStr && <span style={{ opacity: 0.8, fontSize: '0.9em', marginLeft: 4 }}>({sizeStr})</span>}
+            {sizeStr && <span className="fp-size">({sizeStr})</span>}
           </button>
         </div>
         {lightboxOpen && (
           <div
             role="dialog"
             aria-modal="true"
-            style={filePreviewStyles.lightboxBackdrop}
+            className="fp-lightbox-backdrop"
             onClick={() => setLightboxOpen(false)}
           >
             <img
               src={url}
               alt={filename}
-              style={filePreviewStyles.lightboxImage}
+              className="fp-lightbox-image"
               onClick={(e) => e.stopPropagation()}
             />
             <button
               type="button"
               onClick={() => setLightboxOpen(false)}
-              style={filePreviewStyles.lightboxClose}
+              className="fp-lightbox-close"
               aria-label="Закрыть"
             >
               ✕
@@ -197,11 +208,11 @@ function FilePreview({
 
   if (isVideo && url) {
     return wrap(
-      <div style={filePreviewStyles.preview}>
-        <video src={url} controls style={filePreviewStyles.video} />
-        <button type="button" onClick={onDownload} style={filePreviewStyles.downloadBtn}>
+      <div className="fp-preview">
+        <video src={url} controls className="fp-video" />
+        <button type="button" onClick={onDownload} className="fp-download-btn">
           📎 {filename}
-          {sizeStr && <span style={{ opacity: 0.8, fontSize: '0.9em', marginLeft: 4 }}>({sizeStr})</span>}
+          {sizeStr && <span className="fp-size">({sizeStr})</span>}
         </button>
       </div>
     )
@@ -209,11 +220,11 @@ function FilePreview({
 
   if (isAudio && url) {
     return wrap(
-      <div style={filePreviewStyles.preview}>
-        <audio src={url} controls style={filePreviewStyles.audio} />
-        <button type="button" onClick={onDownload} style={filePreviewStyles.downloadBtn}>
+      <div className="fp-preview">
+        <audio src={url} controls className="fp-audio" />
+        <button type="button" onClick={onDownload} className="fp-download-btn">
           📎 {filename}
-          {sizeStr && <span style={{ opacity: 0.8, fontSize: '0.9em', marginLeft: 4 }}>({sizeStr})</span>}
+          {sizeStr && <span className="fp-size">({sizeStr})</span>}
         </button>
       </div>
     )
@@ -221,11 +232,11 @@ function FilePreview({
 
   if (isPdf && url) {
     return wrap(
-      <div style={filePreviewStyles.preview}>
-        <iframe src={url} title={filename} style={filePreviewStyles.pdf} />
-        <button type="button" onClick={onDownload} style={filePreviewStyles.downloadBtn}>
+      <div className="fp-preview">
+        <iframe src={url} title={filename} className="fp-pdf" />
+        <button type="button" onClick={onDownload} className="fp-download-btn">
           📎 {filename}
-          {sizeStr && <span style={{ opacity: 0.8, fontSize: '0.9em', marginLeft: 4 }}>({sizeStr})</span>}
+          {sizeStr && <span className="fp-size">({sizeStr})</span>}
         </button>
       </div>
     )
@@ -233,85 +244,15 @@ function FilePreview({
 
   return wrap(null)
 }
-
-const filePreviewStyles: Record<string, React.CSSProperties> = {
-  preview: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-    maxWidth: 'min(400px, 90vw)',
-  },
-  image: {
-    maxWidth: '100%',
-    maxHeight: 320,
-    borderRadius: 8,
-    cursor: 'pointer',
-  },
-  video: {
-    maxWidth: '100%',
-    maxHeight: 320,
-    borderRadius: 8,
-  },
-  audio: {
-    width: '100%',
-    maxWidth: 320,
-  },
-  pdf: {
-    width: '100%',
-    height: 400,
-    border: '1px solid var(--border)',
-    borderRadius: 8,
-  },
-  downloadBtn: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    background: 'none',
-    border: 'none',
-    color: 'inherit',
-    cursor: 'pointer',
-    padding: 0,
-    font: 'inherit',
-    textDecoration: 'underline',
-    fontSize: 13,
-  },
-  lightboxBackdrop: {
-    position: 'fixed',
-    inset: 0,
-    zIndex: 10000,
-    background: 'rgba(0,0,0,0.85)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    cursor: 'pointer',
-  },
-  lightboxImage: {
-    maxWidth: '95vw',
-    maxHeight: '95vh',
-    objectFit: 'contain',
-    cursor: 'default',
-    borderRadius: 8,
-  },
-  lightboxClose: {
-    position: 'fixed',
-    top: 16,
-    right: 16,
-    width: 40,
-    height: 40,
-    borderRadius: '50%',
-    border: 'none',
-    background: 'rgba(255,255,255,0.2)',
-    color: '#fff',
-    fontSize: 18,
-    cursor: 'pointer',
-  },
-}
-import { encrypt, decrypt, isE2EEPayload } from '../crypto/e2ee'
+import { encrypt, decrypt, isE2EEPayload, encryptAttachment, decryptAttachment } from '../crypto/e2ee'
 import { computeSafetyNumber } from '../crypto/fingerprint'
 import { signalEncrypt, signalDecrypt, isSignalCiphertext, uuidToSignalDeviceId } from '../crypto/signal'
 import { getE2EEMode, setE2EEMode, type E2EEMode } from '../crypto/e2ee-mode'
 import { getStoredIdentityKey, setStoredIdentityKey, checkIdentityKeyChange } from '../crypto/trusted-keys'
 import { createBackup, restoreBackup } from '../crypto/backup'
-import { generateOneTimePrekeys } from '../crypto/keys'
+import { logError } from '../utils/safe-log'
+import { sanitizeForDisplay } from '../utils/sanitize'
+import { generateOneTimePrekeys, generateSignedPrekey } from '../crypto/keys'
 import { useTheme } from '../hooks/useTheme'
 
 function decodeBase64ToBytes(b64: string): Uint8Array {
@@ -353,9 +294,11 @@ interface ChatProps {
   token: string
   keys: StoredKeys | null
   onLogout: () => void
+  addOtpks?: (entries: import('../hooks/useAuth').OneTimePrekeyEntry[]) => Promise<void>
+  rotateSignedPrekey?: (spk: { key: string; signature: string; secret: string; key_id: number }) => Promise<void>
 }
 
-export function Chat({ user, token, keys, onLogout }: ChatProps) {
+export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey }: ChatProps) {
   const { theme, toggleTheme } = useTheme()
   const [recipient, setRecipient] = useState(() => sessionStorage.getItem('chat_recipient') ?? '')
   const [message, setMessage] = useState('')
@@ -432,9 +375,9 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
     return () => window.removeEventListener('keydown', onKey)
   }, [fingerprintModal])
 
-  const trustNewKey = useCallback(() => {
+  const trustNewKey = useCallback(async () => {
     if (!identityKeyChanged) return
-    setStoredIdentityKey(identityKeyChanged.recipient, identityKeyChanged.newKey)
+    await setStoredIdentityKey(identityKeyChanged.recipient, identityKeyChanged.newKey)
     setIdentityKeyChanged(null)
   }, [identityKeyChanged])
 
@@ -463,14 +406,15 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
     }
     let cancelled = false
     api.getKeys(r, token)
-      .then((bundle) => {
+      .then(async (bundle) => {
         if (cancelled) return
-        const res = checkIdentityKeyChange(r, bundle.identity_key)
+        const res = await checkIdentityKeyChange(r, bundle.identity_key)
         if (res.changed) {
           setIdentityKeyChanged({ recipient: r, newKey: bundle.identity_key })
         } else {
           setIdentityKeyChanged(null)
-          if (!getStoredIdentityKey(r)) setStoredIdentityKey(r, bundle.identity_key)
+          const stored = await getStoredIdentityKey(r)
+          if (!stored) await setStoredIdentityKey(r, bundle.identity_key)
         }
       })
       .catch(() => {
@@ -535,21 +479,38 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
     }
   }, [mainView, token])
 
-  // One-time prekey replenishment: when unconsumed < 20, upload more
+  // Keys hygiene: replenish OTPK when < 20; rotate signed prekey when > 7 days old
   const REPLENISH_THRESHOLD = 20
   const REPLENISH_COUNT = 50
+  const SIGNED_PREKEY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
   useEffect(() => {
     if (!keys || !token) return
     let cancelled = false
     api.getKeysStatus(token)
-      .then((st) => {
-        if (cancelled || st.unconsumed_prekeys >= REPLENISH_THRESHOLD) return
-        const newPrekeys = generateOneTimePrekeys(REPLENISH_COUNT, st.next_one_time_key_id)
-        return api.updateKeys({ one_time_prekeys: newPrekeys }, token)
+      .then(async (st) => {
+        const updates: Parameters<typeof api.updateKeys>[0] = {}
+        let newPrekeys: import('../crypto/keys').OneTimePrekeyEntry[] = []
+        if (st.unconsumed_prekeys < REPLENISH_THRESHOLD) {
+          newPrekeys = generateOneTimePrekeys(REPLENISH_COUNT, st.next_one_time_key_id)
+          updates.one_time_prekeys = newPrekeys.map((o) => ({ key: o.pub, key_id: o.key_id }))
+        }
+        let newSpk: { key: string; signature: string; secret: string; key_id: number } | undefined
+        const spkUpdated = new Date(st.signed_prekey_updated_at).getTime()
+        if (keys.identitySigningSecret && keys.identitySigningKey && Date.now() - spkUpdated > SIGNED_PREKEY_MAX_AGE_MS) {
+          const nextId = (keys.signedPrekey.key_id ?? 1) + 1
+          newSpk = generateSignedPrekey(keys.identitySigningSecret, nextId)
+          updates.signed_prekey = { key: newSpk.key, signature: newSpk.signature, key_id: newSpk.key_id }
+          updates.identity_signing_key = keys.identitySigningKey
+        }
+        if (Object.keys(updates).length > 0) {
+          await api.updateKeys(updates, token)
+          if (newPrekeys.length) await addOtpks?.(newPrekeys)
+          if (newSpk) await rotateSignedPrekey?.(newSpk)
+        }
       })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [keys, token])
+  }, [keys, token, addOtpks, rotateSignedPrekey])
 
   useEffect(() => {
     if (!recipient) {
@@ -709,7 +670,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
       setRecipient(room.address)
       setCreateRoomName('')
     } catch (err) {
-      console.error(err)
+      logError('CreateRoom', err)
     } finally {
       setCreateRoomLoading(false)
     }
@@ -766,7 +727,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
       setRecipient('')
       setRoomMembersVisible(false)
     } catch (err) {
-      console.error(err)
+      logError('LeaveRoom', err)
     } finally {
       setLeaveLoading(false)
     }
@@ -780,7 +741,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
       setInviteUsername('')
       fetchRoomMembers()
     } catch (err) {
-      console.error(err)
+      logError('RoomInvite', err)
     } finally {
       setInviteLoading(false)
     }
@@ -795,7 +756,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
       await api.roomsTransferCreator(currentRoom.id, { username: targetUsername }, token)
       fetchRoomMembers()
     } catch (err) {
-      console.error(err)
+      logError('RoomTransfer', err)
     } finally {
       setRoomActionLoading(null)
     }
@@ -809,7 +770,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
       await api.roomsRemoveMember(currentRoom.id, { username: targetUsername }, token)
       fetchRoomMembers()
     } catch (err) {
-      console.error(err)
+      logError('RoomRemove', err)
     } finally {
       setRoomActionLoading(null)
     }
@@ -860,7 +821,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
       await api.vpnRevoke({ protocol: c.protocol, device_id: c.device_id }, token)
       refreshVpnMyConfigs()
     } catch (err) {
-      console.error(err)
+      logError('VpnRevoke', err)
     }
   }
 
@@ -879,8 +840,9 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
         identityKey: keys.identityKey,
         identitySecret: keys.identitySecret,
         ...(keys.identitySigningKey && { identitySigningKey: keys.identitySigningKey }),
+        ...(keys.identitySigningSecret && { identitySigningSecret: keys.identitySigningSecret }),
         signedPrekey: keys.signedPrekey,
-        oneTimePrekeys: keys.oneTimePrekeys,
+        oneTimePrekeys: keys.oneTimePrekeys.map((o) => o.pub),
       }
       const blobB64 = await createBackup(payload, password, salt)
       await api.keysSync(token, { salt, blob: blobB64 })
@@ -918,12 +880,14 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
       const blobB64 = btoa(bin)
       const { salt } = await api.backupGetSalt(token)
       const payload = await restoreBackup(blobB64, password, salt)
-      localStorage.setItem('keys', JSON.stringify({
+      await setKeysInStorage({
         identityKey: payload.identityKey,
         identitySecret: payload.identitySecret,
+        identitySigningKey: payload.identitySigningKey,
+        ...(payload.identitySigningSecret && { identitySigningSecret: payload.identitySigningSecret }),
         signedPrekey: payload.signedPrekey,
-        oneTimePrekeys: payload.oneTimePrekeys ?? [],
-      }))
+        oneTimePrekeys: [],
+      })
       window.location.reload()
     } catch (err) {
       setBackupError(err instanceof Error ? err.message : 'Ошибка восстановления')
@@ -939,7 +903,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
       await api.vpnConfig(protocol, token, undefined, nodeId || selectedNodeId || undefined)
       refreshVpnMyConfigs()
     } catch (err) {
-      console.error(err)
+      logError('VpnConfig', err)
     } finally {
       setVpnLoading(null)
     }
@@ -957,6 +921,46 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
     }
     return signalEncrypt(plaintext, bundle, ourKeys, addr, deviceId).catch(() => encrypt(plaintext, bundle))
   }
+
+  /** Encrypt DM for recipient (all devices) + self. Returns ciphertexts map. */
+  const encryptDMForRecipient = useCallback(
+    async (payload: string, recipientAddr: string): Promise<Record<string, string>> => {
+      if (!keys) return {}
+      const selfBundle = {
+        identity_key: keys.identityKey,
+        signed_prekey: { key: keys.signedPrekey.key, signature: keys.signedPrekey.signature, key_id: keys.signedPrekey.key_id ?? 1 },
+      }
+      const ciphertexts: Record<string, string> = {}
+      const selfKey = `${user.user_id}:${user.device_id}`
+      try {
+        const { devices } = await api.getRecipientDevices(recipientAddr, token)
+        if (devices?.length) {
+          for (const d of devices) {
+            try {
+              const bundle = await api.getKeys(recipientAddr, token, d.device_id)
+              const ct = await encryptDM(payload, bundle, keys, recipientAddr, uuidToSignalDeviceId(d.device_id))
+              ciphertexts[`${recipientAddr}:${d.device_id}`] = ct
+            } catch {
+              // skip device without keys
+            }
+          }
+        }
+        if (Object.keys(ciphertexts).length === 0) {
+          const bundle = await api.getKeys(recipientAddr, token)
+          const ct = await encryptDM(payload, bundle, keys, recipientAddr)
+          ciphertexts[recipientAddr] = ct
+        }
+      } catch {
+        const bundle = await api.getKeys(recipientAddr, token)
+        const ct = await encryptDM(payload, bundle, keys, recipientAddr)
+        ciphertexts[recipientAddr] = ct
+      }
+      const ctSelf = await encryptDM(payload, selfBundle, keys, user.user_id, uuidToSignalDeviceId(user.device_id))
+      ciphertexts[selfKey] = ctSelf
+      return ciphertexts
+    },
+    [keys, token, user.user_id, user.device_id, e2eeMode]
+  )
 
   const encryptForRoom = async (roomAddr: string, payload: string): Promise<Record<string, string> | null> => {
     if (!keys) return null
@@ -986,12 +990,17 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
     setSendHint(null)
     setSendHintError(false)
     try {
-      const { content_uri } = await api.uploadFile(file, token)
+      const fileBytes = new Uint8Array(await file.arrayBuffer())
+      const { ciphertext, fileKey, nonce } = await encryptAttachment(fileBytes)
+      const cipherBlob = new Blob([ciphertext])
+      const { content_uri } = await api.uploadFile(cipherBlob, token)
       const payload = JSON.stringify({
         message_type: 'file',
         content_uri,
         filename: file.name,
         size: file.size,
+        file_key: fileKey,
+        nonce,
       })
       const isRoom = isRoomAddr(r)
       let content: { ciphertext?: string; ciphertexts?: Record<string, string>; session_id: string }
@@ -1000,11 +1009,8 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
         content = ciphertexts ? { ciphertexts, session_id: 'sess_mvp' } : { ciphertext: btoa(unescape(encodeURIComponent(payload))), session_id: 'sess_mvp' }
       } else if (keys && !isRoom) {
         try {
-          const bundle = await api.getKeys(r, token)
-          const selfBundle = { identity_key: keys.identityKey, signed_prekey: { key: keys.signedPrekey.key, signature: keys.signedPrekey.signature, key_id: keys.signedPrekey.key_id ?? 1 } }
-          const ctRecipient = await encryptDM(payload, bundle, keys, r)
-          const ctSelf = await encryptDM(payload, selfBundle, keys, user.user_id, uuidToSignalDeviceId(user.device_id))
-          content = { ciphertexts: { [r]: ctRecipient, [user.user_id]: ctSelf }, session_id: 'sess_mvp' }
+          const ciphertexts = await encryptDMForRecipient(payload, r)
+          content = { ciphertexts, session_id: 'sess_mvp' }
         } catch (e) {
           if (e instanceof ApiError && e.status === 404) {
             setSendHint('Пользователь не найден')
@@ -1046,7 +1052,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
         setSendHint('Пользователь не найден')
         setSendHintError(true)
       } else {
-        console.error(e)
+        logError('Send/file', e)
         setSendHint('Не удалось отправить файл. Проверьте соединение и попробуйте снова.')
         setSendHintError(true)
       }
@@ -1085,11 +1091,8 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
         content = ciphertexts ? { ciphertexts, session_id: 'sess_mvp' } : { ciphertext: btoa(unescape(encodeURIComponent(plaintext))), session_id: 'sess_mvp' }
       } else if (keys && !isRoom) {
         try {
-          const bundle = await api.getKeys(r, token)
-          const selfBundle = { identity_key: keys.identityKey, signed_prekey: { key: keys.signedPrekey.key, signature: keys.signedPrekey.signature, key_id: keys.signedPrekey.key_id ?? 1 } }
-          const ctRecipient = await encryptDM(plaintext, bundle, keys, r)
-          const ctSelf = await encryptDM(plaintext, selfBundle, keys, user.user_id, uuidToSignalDeviceId(user.device_id))
-          content = { ciphertexts: { [r]: ctRecipient, [user.user_id]: ctSelf }, session_id: 'sess_mvp' }
+          const ciphertexts = await encryptDMForRecipient(plaintext, r)
+          content = { ciphertexts, session_id: 'sess_mvp' }
         } catch (e) {
           if (e instanceof ApiError && e.status === 404) {
             setSendHint('Пользователь не найден')
@@ -1133,7 +1136,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
         setSendHint('Пользователь не найден')
         setSendHintError(true)
       } else {
-        console.error(e)
+        logError('Send/file', e)
         setSendHint('Не удалось отправить. Проверьте соединение и попробуйте снова.')
         setSendHintError(true)
       }
@@ -1142,7 +1145,9 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
     }
   }
 
-  type ParsedMessage = { type: 'text'; text: string } | { type: 'file'; filename: string; content_uri: string; size?: number }
+  type ParsedMessage =
+    | { type: 'text'; text: string }
+    | { type: 'file'; filename: string; content_uri: string; size?: number; file_key?: string; nonce?: string }
 
   const parseMessage = (ciphertext: string, eventId?: string): ParsedMessage => {
     if (!ciphertext) return { type: 'text', text: '[encrypted]' }
@@ -1178,7 +1183,14 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
     try {
       const parsed = JSON.parse(plaintext)
       if (parsed?.message_type === 'file' && parsed?.content_uri) {
-        return { type: 'file', filename: parsed.filename || 'file', content_uri: parsed.content_uri, size: parsed.size }
+        return {
+          type: 'file',
+          filename: parsed.filename || 'file',
+          content_uri: parsed.content_uri,
+          size: parsed.size,
+          file_key: parsed.file_key,
+          nonce: parsed.nonce,
+        }
       }
     } catch {
       /* plain text */
@@ -1221,16 +1233,21 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
       await api.pushSubscribe(sub.toJSON(), token)
       setPushEnabled(true)
     } catch (e) {
-      console.error('Push subscribe:', e)
+      logError('Push subscribe', e)
     } finally {
       setPushLoading(false)
     }
   }, [token])
 
-  const downloadFileMessage = async (contentUri: string, filename: string) => {
+  const downloadFileMessage = async (contentUri: string, filename: string, fileKey?: string, nonce?: string) => {
     try {
       const res = await api.downloadFile(contentUri, token)
-      const blob = await res.blob()
+      let blob: Blob = await res.blob()
+      if (fileKey && nonce) {
+        const ciphertext = new Uint8Array(await blob.arrayBuffer())
+        const plain = decryptAttachment(ciphertext, fileKey, nonce)
+        blob = new Blob([new Uint8Array(plain)])
+      }
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -1238,63 +1255,46 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
       a.click()
       URL.revokeObjectURL(url)
     } catch (err) {
-      console.error(err)
+      logError('FileDownload', err)
     }
   }
 
   return (
-    <div className="chat-layout" style={styles.layout}>
-      <header style={styles.header}>
-        <div style={styles.headerLeft}>
-          <span style={styles.headerUser}>{user.user_id}</span>
+    <div className="chat-layout">
+      <header>
+        <div className="chat-header-left">
+          <span className="chat-header-user">{user.user_id}</span>
           <span
-            style={{
-              display: 'inline-block',
-              marginLeft: 6,
-              width: 8,
-              height: 8,
-              borderRadius: '50%',
-              backgroundColor: wsConnected ? 'var(--success, #22c55e)' : 'var(--muted, #94a3b8)',
-              flexShrink: 0,
-            }}
+            className={`chat-ws-dot ${wsConnected ? 'chat-ws-dot--connected' : ''}`}
             title={wsConnected ? 'Подключено' : 'Нет соединения — переподключение…'}
           />
           {!wsConnected && (
-            <span style={{ marginLeft: 6, fontSize: 12, color: 'var(--text-muted, #94a3b8)' }}>Переподключение…</span>
+            <span className="chat-ws-reconnecting">Переподключение…</span>
           )}
-          <span style={{ ...styles.e2eeStatus, opacity: keys ? 1 : 0.6, marginLeft: 6 }} title={keys ? 'E2EE ключи загружены' : 'E2EE недоступен — войдите заново или восстановите ключи'}>
+          <span className={`chat-e2ee-status ${keys ? 'chat-e2ee-status--loaded' : ''}`} title={keys ? 'E2EE ключи загружены' : 'E2EE недоступен — войдите заново или восстановите ключи'}>
             {keys ? '🔒' : '⚠️'}
           </span>
         </div>
-        <div style={styles.headerActions}>
-          <div style={{ display: 'flex', gap: 4, marginRight: 8 }}>
+        <div className="chat-header-actions">
+          <div className="chat-tab-btns">
             <button
               type="button"
               onClick={() => setMainView('chats')}
-              style={{
-                ...styles.tabBtn,
-                ...(mainView === 'chats' ? styles.tabBtnActive : {}),
-              }}
+              className={`chat-tab-btn ${mainView === 'chats' ? 'chat-tab-btn--active' : ''}`}
             >
               Чаты
             </button>
             <button
               type="button"
               onClick={() => setMainView('vpn')}
-              style={{
-                ...styles.tabBtn,
-                ...(mainView === 'vpn' ? styles.tabBtnActive : {}),
-              }}
+              className={`chat-tab-btn ${mainView === 'vpn' ? 'chat-tab-btn--active' : ''}`}
             >
               VPN
             </button>
             <button
               type="button"
               onClick={() => setMainView('devices')}
-              style={{
-                ...styles.tabBtn,
-                ...(mainView === 'devices' ? styles.tabBtnActive : {}),
-              }}
+              className={`chat-tab-btn ${mainView === 'devices' ? 'chat-tab-btn--active' : ''}`}
             >
               Устройства
             </button>
@@ -1304,7 +1304,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
               type="button"
               onClick={enablePush}
               disabled={pushLoading || pushEnabled}
-              style={styles.themeBtn}
+              className="chat-theme-btn"
               title={pushEnabled ? 'Push включены' : 'Включить push-уведомления'}
             >
               {pushLoading ? '…' : pushEnabled ? '📲' : '📱'}
@@ -1312,59 +1312,52 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
           )}
           <button
             onClick={() => setSoundEnabled((v) => !v)}
-            style={styles.themeBtn}
+            className="chat-theme-btn"
             title={soundEnabled ? 'Звук вкл — выключить' : 'Звук выкл — включить'}
           >
             {soundEnabled ? '🔔' : '🔕'}
           </button>
-          <button onClick={toggleTheme} style={styles.themeBtn} title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}>
+          <button onClick={toggleTheme} className="chat-theme-btn" title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}>
             {theme === 'dark' ? '☀️' : '🌙'}
           </button>
-          <button onClick={onLogout} style={styles.logout}>
+          <button onClick={onLogout} className="chat-logout">
             Выход
           </button>
         </div>
       </header>
 
-      <main style={styles.main} className="chat-main">
+      <main className="chat-main">
         {mainView === 'devices' ? (
           <>
-            <div style={{ ...styles.sidebar, width: 120, minWidth: 120 }}>
-              <div style={styles.sidebarSection}>
-                <button type="button" onClick={() => setMainView('chats')} style={{ ...styles.vpnBtn, width: '100%', marginTop: 8 }}>
+            <div className="chat-sidebar-narrow">
+              <div className="chat-sidebar-section">
+                <button type="button" onClick={() => setMainView('chats')} className="chat-vpn-btn chat-vpn-btn-full">
                   ← Чаты
                 </button>
               </div>
             </div>
-            <div style={{ flex: 1, padding: 24, overflow: 'auto' }}>
-              <h2 style={{ margin: '0 0 16px', fontSize: 20 }}>Мои устройства</h2>
-              <p style={{ ...styles.vpnProtoHint, marginBottom: 16 }}>Устройства, с которых вы входили в аккаунт. Удаление отзовёт сессию — устройство потребует повторного входа.</p>
+            <div className="chat-content-area">
+              <h2>Мои устройства</h2>
+              <p className="chat-vpn-proto-hint chat-mb-16">Устройства, с которых вы входили в аккаунт. Удаление отзовёт сессию — устройство потребует повторного входа.</p>
               {devicesLoading ? (
-                <p style={styles.vpnProtoHint}>Загрузка…</p>
+                <p className="chat-vpn-proto-hint">Загрузка…</p>
               ) : devices.length === 0 ? (
-                <p style={styles.vpnProtoHint}>Нет устройств</p>
+                <p className="chat-vpn-proto-hint">Нет устройств</p>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div className="chat-devices-section">
                   {devices.map((d) => (
                     <div
                       key={d.device_id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '12px 16px',
-                        background: 'var(--bg)',
-                        borderRadius: 8,
-                        border: d.is_current ? '1px solid var(--accent)' : '1px solid var(--border)',
-                      }}
+                      className={`chat-device-card ${d.is_current ? 'chat-device-card--current' : ''}`}
                     >
                       <div>
-                        <span style={{ fontWeight: 500, fontSize: 14 }}>{d.device_id.slice(0, 8)}…{d.device_id.slice(-4)}</span>
-                        {d.is_current && <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--accent)' }}>текущее</span>}
-                        <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>Создано: {d.created_at}</p>
+                        <span className="chat-device-id">{d.device_id.slice(0, 8)}…{d.device_id.slice(-4)}</span>
+                        {d.is_current && <span className="chat-device-current-badge">текущее</span>}
+                        <p className="chat-device-created">Создано: {d.created_at}</p>
                       </div>
                       <button
                         type="button"
+                        className="chat-vpn-btn-danger"
                         onClick={async () => {
                           if (d.is_current && !window.confirm('Удалить текущее устройство? Вы выйдете из аккаунта.')) return
                           setDevicesRevokeLoading(d.device_id)
@@ -1373,13 +1366,12 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                             setDevices((prev) => prev.filter((x) => x.device_id !== d.device_id))
                             if (d.is_current) onLogout()
                           } catch (err) {
-                            console.error(err)
+                            logError('DeviceRevoke', err)
                           } finally {
                             setDevicesRevokeLoading(null)
                           }
                         }}
                         disabled={devicesRevokeLoading === d.device_id}
-                        style={{ ...styles.vpnBtnDanger, padding: '6px 12px', fontSize: 12 }}
                       >
                         {devicesRevokeLoading === d.device_id ? '…' : 'Удалить'}
                       </button>
@@ -1391,27 +1383,27 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
           </>
         ) : mainView === 'vpn' ? (
           <>
-            <div style={{ ...styles.sidebar, width: 120, minWidth: 120 }}>
-              <div style={styles.sidebarSection}>
+            <div className="chat-sidebar-narrow">
+              <div className="chat-sidebar-section">
                 <button
                   type="button"
                   onClick={() => setMainView('chats')}
-                  style={{ ...styles.vpnBtn, width: '100%', marginTop: 8 }}
+                  className="chat-vpn-btn chat-vpn-btn-full"
                 >
                   ← Чаты
                 </button>
               </div>
             </div>
-            <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
-              <h2 style={{ margin: '0 0 20px', fontSize: 20 }}>VPN</h2>
-              <p style={{ ...styles.vpnHint, marginBottom: 20 }}>Скачайте конфиг и подключитесь. Только ваши конфиги.</p>
+            <div className="chat-content-area">
+              <h2 className="vpn-h2">VPN</h2>
+              <p className="chat-vpn-hint chat-mb-20">Скачайте конфиг и подключитесь. Только ваши конфиги.</p>
               {vpnNodes.length > 1 && (
-                <div style={{ marginBottom: 16 }}>
-                  <label style={{ fontSize: 13, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Нода</label>
+                <div className="chat-mb-16">
+                  <label className="chat-select-label">Нода</label>
                   <select
                     value={selectedNodeId}
                     onChange={(e) => setSelectedNodeId(e.target.value)}
-                    style={{ ...styles.recipientInput, padding: '8px 12px', maxWidth: 320 }}
+                    className="chat-recipient-input chat-select-node"
                   >
                     {[...vpnNodes]
                       .sort((a, b) => {
@@ -1436,19 +1428,19 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                   </select>
                 </div>
               )}
-              <div style={{ marginBottom: 24 }}>
-                <h3 style={{ margin: '0 0 12px', fontSize: 16 }}>Протоколы</h3>
+              <div className="chat-mb-24">
+                <h3 className="chat-h3">Протоколы</h3>
                 {vpnProtocols.length === 0 ? (
-                  <p style={styles.vpnProtoHint}>Загрузка…</p>
+                  <p className="chat-vpn-proto-hint">Загрузка…</p>
                 ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div className="chat-protocols-list">
                     {vpnProtocols.map((p) => (
-                      <div key={p.id} style={styles.vpnProtocol}>
+                      <div key={p.id} className="chat-vpn-protocol">
                         <div>
                           <strong>{p.name}</strong>
-                          <p style={styles.vpnProtoHint}>{p.hint}</p>
+                          <p className="chat-vpn-proto-hint">{p.hint}</p>
                         </div>
-                        <button style={styles.vpnBtn} onClick={() => downloadVpnConfig(p.id)} disabled={vpnLoading === p.id}>
+                        <button className="chat-vpn-btn" onClick={() => downloadVpnConfig(p.id)} disabled={vpnLoading === p.id}>
                           {vpnLoading === p.id ? '…' : 'Скачать'}
                         </button>
                       </div>
@@ -1456,17 +1448,17 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                   </div>
                 )}
               </div>
-              <div style={styles.vpnAdminSection}>
-                <h3 style={{ margin: '0 0 12px', fontSize: 16 }}>Мои конфиги</h3>
-                <p style={styles.vpnHint}>Только ваши выданные конфиги</p>
+              <div className="chat-vpn-admin-section">
+                <h3 className="chat-h3">Мои конфиги</h3>
+                <p className="chat-vpn-hint">Только ваши выданные конфиги</p>
                 {vpnMyConfigs.length === 0 ? (
-                  <p style={styles.vpnProtoHint}>Нет конфигов. Скачайте протокол выше.</p>
+                  <p className="chat-vpn-proto-hint">Нет конфигов. Скачайте протокол выше.</p>
                 ) : (
                   vpnMyConfigs.map((c, i) => (
-                    <div key={`${c.device_id}-${c.protocol}-${i}`} style={styles.vpnAdminRow}>
+                    <div key={`${c.device_id}-${c.protocol}-${i}`} className="chat-vpn-admin-row">
                       <div>
                         <strong>{c.protocol}</strong>{c.node_name ? ` · ${c.node_name}` : ''}
-                        <p style={styles.vpnProtoHint}>
+                        <p className="chat-vpn-proto-hint">
                           {new Date(c.created_at).toLocaleDateString()}
                           {c.expires_at && ` · истекает ${new Date(c.expires_at).toLocaleDateString()}`}
                           {c.is_expired && ' (истёк)'}
@@ -1478,25 +1470,25 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                           })()}
                         </p>
                       </div>
-                      <div style={styles.vpnAdminActions}>
-                        <button style={styles.vpnBtn} onClick={() => downloadVpnConfig(c.protocol)} disabled={vpnLoading === c.protocol} title="Скачать снова">↻</button>
-                        <button style={styles.vpnBtnDanger} onClick={() => vpnRevoke(c)} title="Отозвать">✕</button>
+                      <div className="chat-vpn-admin-actions">
+                        <button className="chat-vpn-btn" onClick={() => downloadVpnConfig(c.protocol)} disabled={vpnLoading === c.protocol} title="Скачать снова">↻</button>
+                        <button className="chat-vpn-btn-danger" onClick={() => vpnRevoke(c)} title="Отозвать">✕</button>
                       </div>
                     </div>
                   ))
                 )}
               </div>
-              <div style={styles.vpnAdminSection}>
-                <h3 style={{ margin: '0 0 12px', fontSize: 16 }}>Резервная копия ключей</h3>
-                <p style={styles.vpnHint}>Без сервера расшифровать нельзя</p>
-                {backupError && <p style={{ ...styles.vpnProtoHint, color: 'var(--error)' }}>{backupError}</p>}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <button style={styles.vpnBtn} onClick={handleCreateBackup} disabled={backupLoading || !keys} title="Создать зашифрованный бэкап">
+              <div className="chat-vpn-admin-section">
+                <h3 className="chat-h3">Резервная копия ключей</h3>
+                <p className="chat-vpn-hint">Без сервера расшифровать нельзя</p>
+                {backupError && <p className="chat-vpn-proto-hint chat-error-text">{backupError}</p>}
+                <div className="chat-backup-actions">
+                  <button className="chat-vpn-btn" onClick={handleCreateBackup} disabled={backupLoading || !keys} title="Создать зашифрованный бэкап">
                     {backupLoading ? '…' : 'Создать бэкап'}
                   </button>
                   <div>
-                    <input ref={restoreInputRef} type="file" accept=".dat" style={{ display: 'none' }} onChange={(e) => { if (e.target.files?.[0]) handleRestoreBackup(); e.target.value = '' }} />
-                    <button style={styles.vpnBtn} onClick={() => restoreInputRef.current?.click()} disabled={backupLoading}>Восстановить из бэкапа</button>
+                    <input ref={restoreInputRef} type="file" accept=".dat" className="chat-input-hidden" onChange={(e) => { if (e.target.files?.[0]) handleRestoreBackup(); e.target.value = '' }} />
+                    <button className="chat-vpn-btn" onClick={() => restoreInputRef.current?.click()} disabled={backupLoading}>Восстановить из бэкапа</button>
                   </div>
                 </div>
               </div>
@@ -1504,12 +1496,12 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
           </>
         ) : (
         <>
-        <div style={styles.sidebar} className="chat-sidebar">
-          <div style={styles.sidebarSection}>
-            <h3 style={styles.sidebarTitle}>Чаты</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflowY: 'auto' }}>
+        <div className="chat-sidebar">
+          <div className="chat-sidebar-section">
+            <h3 className="chat-sidebar-title">Чаты</h3>
+            <div className="chat-chat-list">
               {chatList.length === 0 ? (
-                <p style={styles.vpnProtoHint}>Нет чатов. Начните новый ниже.</p>
+                <p className="chat-vpn-proto-hint">Нет чатов. Начните новый ниже.</p>
               ) : (
                 chatList.map(({ addr, label }) => {
                   const unread = getUnreadCount(addr)
@@ -1518,44 +1510,40 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                       key={addr}
                       type="button"
                       onClick={() => setRecipient(addr)}
-                      style={{
-                        ...styles.roomItem,
-                        background: recipient === addr ? 'var(--accent-subtle)' : 'transparent',
-                        borderColor: recipient === addr ? 'var(--accent)' : 'transparent',
-                      }}
+                      className={`chat-room-item ${recipient === addr ? 'chat-room-item--active' : ''}`}
                     >
-                      <span style={{ fontWeight: 500, flex: 1, textAlign: 'left' }}>{label}</span>
+                      <span className="chat-room-item-label">{label}</span>
                       {unread > 0 && (
-                        <span style={styles.unreadBadge}>{unread > 99 ? '99+' : unread}</span>
+                        <span className="chat-unread-badge">{unread > 99 ? '99+' : unread}</span>
                       )}
                     </button>
                   )
                 })
               )}
             </div>
-            <div style={{ marginTop: 10 }}>
+            <div className="chat-mt-10">
               <input
                 type="text"
                 placeholder="Новый чат: пользователь или @user:domain"
                 value={recipient}
                 onChange={(e) => { setRecipient(e.target.value); setSendHint(null) }}
-                style={{ ...styles.recipientInput, padding: '8px 10px', fontSize: 13 }}
+                className="chat-recipient-input chat-recipient-input-sm"
               />
             </div>
           </div>
-          <div style={styles.sidebarSection}>
-            <h4 style={styles.vpnTitle}>Комнаты</h4>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+          <div className="chat-sidebar-section">
+            <h4 className="chat-vpn-title">Комнаты</h4>
+            <div className="chat-room-actions">
               <input
                 type="text"
                 placeholder="Название комнаты"
                 value={createRoomName}
                 onChange={(e) => setCreateRoomName(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleCreateRoom()}
-                style={{ ...styles.recipientInput, flex: 1, padding: '6px 10px' }}
+                className="chat-recipient-input chat-recipient-input-flex"
               />
               <button
-                style={styles.vpnBtn}
+                className="chat-vpn-btn"
                 onClick={handleCreateRoom}
                 disabled={createRoomLoading || !createRoomName.trim()}
                 title="Создать комнату"
@@ -1564,11 +1552,11 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
               </button>
             </div>
             {roomsLoading ? (
-              <p style={styles.vpnProtoHint}>Загрузка…</p>
+              <p className="chat-vpn-proto-hint">Загрузка…</p>
             ) : rooms.length === 0 ? (
-              <p style={styles.vpnProtoHint}>Нет комнат. Создайте комнату выше.</p>
+              <p className="chat-vpn-proto-hint">Нет комнат. Создайте комнату выше.</p>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div className="chat-chat-list">
                 {rooms.map((room) => {
                   const unread = getUnreadCount(room.address)
                   return (
@@ -1576,15 +1564,11 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                     key={room.id}
                     type="button"
                     onClick={() => setRecipient(room.address)}
-                    style={{
-                      ...styles.roomItem,
-                      background: recipient === room.address ? 'var(--accent-subtle)' : 'transparent',
-                      borderColor: recipient === room.address ? 'var(--accent)' : 'transparent',
-                    }}
+                    className={`chat-room-item ${recipient === room.address ? 'chat-room-item--active' : ''}`}
                   >
-                    <span style={{ fontWeight: 500, flex: 1, textAlign: 'left' }}>{room.name}</span>
+                    <span className="chat-room-item-label">{room.name}</span>
                     {unread > 0 && (
-                      <span style={styles.unreadBadge}>{unread > 99 ? '99+' : unread}</span>
+                      <span className="chat-unread-badge">{unread > 99 ? '99+' : unread}</span>
                     )}
                   </button>
                 )
@@ -1593,17 +1577,17 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
             )}
           </div>
           {vpnProtocols.length > 0 && (
-            <div style={styles.vpnSection}>
-              <div style={styles.sidebarSection}>
-              <h4 style={styles.vpnTitle}>VPN</h4>
-              <p style={styles.vpnHint}>Не работает? Попробуй другой протокол</p>
+            <div className="chat-vpn-section">
+              <div className="chat-sidebar-section">
+              <h4 className="chat-vpn-title">VPN</h4>
+              <p className="chat-vpn-hint">Не работает? Попробуй другой протокол</p>
               {vpnNodes.length > 1 && (
-                <div style={{ marginBottom: 8 }}>
-                  <label style={{ fontSize: 12, color: 'var(--text-muted)' }}>Нода: </label>
+                <div className="chat-mb-8">
+                  <label className="chat-select-label chat-select-label-sm">Нода: </label>
                   <select
                     value={selectedNodeId}
                     onChange={(e) => setSelectedNodeId(e.target.value)}
-                    style={{ ...styles.recipientInput, padding: 4, marginTop: 4 }}
+                    className="chat-recipient-input chat-recipient-input-xs"
                   >
                     {[...vpnNodes]
                       .sort((a, b) => {
@@ -1629,13 +1613,13 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                 </div>
               )}
               {vpnProtocols.map((p) => (
-                <div key={p.id} style={styles.vpnProtocol}>
+                <div key={p.id} className="chat-vpn-protocol">
                   <div>
                     <strong>{p.name}</strong>
-                    <p style={styles.vpnProtoHint}>{p.hint}</p>
+                    <p className="chat-vpn-proto-hint">{p.hint}</p>
                   </div>
                   <button
-                    style={styles.vpnBtn}
+                    className="chat-vpn-btn"
                     onClick={() => downloadVpnConfig(p.id)}
                     disabled={vpnLoading === p.id}
                   >
@@ -1647,17 +1631,17 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
             </div>
           )}
           {vpnProtocols.length > 0 && (
-            <div style={styles.vpnAdminSection}>
-              <h4 style={styles.vpnTitle}>Мои конфиги</h4>
-              <p style={styles.vpnHint}>Только ваши выданные конфиги</p>
+            <div className="chat-vpn-admin-section">
+              <h4 className="chat-vpn-title">Мои конфиги</h4>
+              <p className="chat-vpn-hint">Только ваши выданные конфиги</p>
               {vpnMyConfigs.length === 0 ? (
-                <p style={styles.vpnProtoHint}>Нет конфигов. Скачайте протокол выше.</p>
+                <p className="chat-vpn-proto-hint">Нет конфигов. Скачайте протокол выше.</p>
               ) : (
                 vpnMyConfigs.map((c, i) => (
-                  <div key={`${c.device_id}-${c.protocol}-${i}`} style={styles.vpnAdminRow}>
+                  <div key={`${c.device_id}-${c.protocol}-${i}`} className="chat-vpn-admin-row">
                     <div>
                       <strong>{c.protocol}</strong>{c.node_name ? ` · ${c.node_name}` : ''}
-                      <p style={styles.vpnProtoHint}>
+                      <p className="chat-vpn-proto-hint">
                         {new Date(c.created_at).toLocaleDateString()}
                         {c.expires_at && ` · истекает ${new Date(c.expires_at).toLocaleDateString()}`}
                         {c.is_expired && ' (истёк)'}
@@ -1671,11 +1655,11 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                         })()}
                       </p>
                     </div>
-                    <div style={styles.vpnAdminActions}>
-                      <button style={styles.vpnBtn} onClick={() => downloadVpnConfig(c.protocol)} disabled={vpnLoading === c.protocol} title="Скачать снова">
+                    <div className="chat-vpn-admin-actions">
+                      <button className="chat-vpn-btn" onClick={() => downloadVpnConfig(c.protocol)} disabled={vpnLoading === c.protocol} title="Скачать снова">
                         ↻
                       </button>
-                      <button style={styles.vpnBtnDanger} onClick={() => vpnRevoke(c)} title="Отозвать">
+                      <button className="chat-vpn-btn-danger" onClick={() => vpnRevoke(c)} title="Отозвать">
                         ✕
                       </button>
                     </div>
@@ -1684,13 +1668,13 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
               )}
             </div>
           )}
-          <div style={styles.vpnAdminSection}>
-            <h4 style={styles.vpnTitle}>Резервная копия ключей</h4>
-            <p style={styles.vpnHint}>Без сервера расшифровать нельзя</p>
-            {backupError && <p style={{ ...styles.vpnProtoHint, color: 'var(--error)' }}>{backupError}</p>}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div className="chat-vpn-admin-section">
+            <h4 className="chat-vpn-title">Резервная копия ключей</h4>
+            <p className="chat-vpn-hint">Без сервера расшифровать нельзя</p>
+            {backupError && <p className="chat-vpn-proto-hint chat-error-text">{backupError}</p>}
+            <div className="chat-backup-actions">
               <button
-                style={styles.vpnBtn}
+                className="chat-vpn-btn"
                 onClick={handleCreateBackup}
                 disabled={backupLoading || !keys}
                 title="Создать зашифрованный бэкап"
@@ -1702,14 +1686,14 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                   ref={restoreInputRef}
                   type="file"
                   accept=".dat"
-                  style={{ display: 'none' }}
+                  className="chat-input-hidden"
                   onChange={(e) => {
                     if (e.target.files?.[0]) handleRestoreBackup()
                     e.target.value = ''
                   }}
                 />
                 <button
-                  style={styles.vpnBtn}
+                  className="chat-vpn-btn"
                   onClick={() => restoreInputRef.current?.click()}
                   disabled={backupLoading}
                 >
@@ -1720,11 +1704,11 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
           </div>
         </div>
 
-        <div style={styles.chat}>
-          <div style={styles.recipientBar}>
+        <div className="chat-chat">
+          <div className="chat-recipient-bar">
             {recipient.trim() ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '4px 0' }}>
-                <p style={{ ...styles.chatWith, margin: 0 }}>
+              <div className="chat-recipient-flex">
+                <p className="chat-with chat-with-no-margin">
                   {isRoomAddr(normalizeRecipient(recipient, user.user_id))
                     ? `Комната: ${rooms.find((r) => r.address === normalizeRecipient(recipient, user.user_id))?.name ?? recipient}`
                     : `Чат с ${normalizeRecipient(recipient, user.user_id)}`}
@@ -1734,13 +1718,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                     <button
                       type="button"
                       onClick={() => setE2eeMode(e2eeMode === 'strict' ? 'compatibility' : 'strict')}
-                      style={{
-                        ...styles.themeBtn,
-                        fontSize: 12,
-                        padding: '4px 8px',
-                        opacity: e2eeMode === 'strict' ? 1 : 0.8,
-                        borderColor: e2eeMode === 'strict' ? 'var(--accent)' : undefined,
-                      }}
+                      className={`chat-theme-btn chat-e2ee-mode-btn ${e2eeMode === 'strict' ? 'chat-e2ee-mode-btn--strict' : ''}`}
                       title={e2eeMode === 'strict' ? 'Strict: только Signal, без fallback на MVP. Нажмите для Compatibility.' : 'Compatibility: при ошибке Signal — fallback на MVP. Нажмите для Strict.'}
                     >
                       E2EE: {e2eeMode === 'strict' ? 'Strict' : 'Compat'}
@@ -1749,7 +1727,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                       type="button"
                       onClick={showFingerprint}
                       disabled={fingerprintLoading}
-                      style={{ ...styles.themeBtn, fontSize: 12, padding: '4px 8px' }}
+                      className="chat-theme-btn chat-e2ee-mode-btn"
                       title="Проверить ключ (Safety number)"
                     >
                       {fingerprintLoading ? '…' : '🔐 Отпечаток'}
@@ -1757,7 +1735,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                   </>
                 )}
                 {typingFrom && ((typingRoom && currentRecipient === typingRoom) || (!typingRoom && currentRecipient === typingFrom)) && (
-                  <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>{typingFrom.replace(/^@([^:]+).*/, '$1')} печатает…</span>
+                  <span className="chat-typing">{typingFrom.replace(/^@([^:]+).*/, '$1')} печатает…</span>
                 )}
                 {currentRecipient && (
                   <input
@@ -1765,7 +1743,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                     placeholder="Поиск в чате…"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    style={{ ...styles.recipientInput, maxWidth: 180, padding: '6px 10px', fontSize: 13 }}
+                    className="chat-recipient-input chat-recipient-input-search"
                   />
                 )}
                 {currentRoom && (
@@ -1773,7 +1751,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                     <button
                       type="button"
                       onClick={() => setRoomMembersVisible((v) => !v)}
-                      style={{ ...styles.vpnBtn, padding: '4px 10px', fontSize: 12 }}
+                      className="chat-vpn-btn chat-btn-sm"
                     >
                       {roomMembersVisible ? 'Скрыть участников' : 'Участники'}
                     </button>
@@ -1781,7 +1759,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                       type="button"
                       onClick={handleLeaveRoom}
                       disabled={leaveLoading}
-                      style={{ ...styles.vpnBtnDanger, padding: '4px 10px', fontSize: 12 }}
+                      className="chat-vpn-btn-danger chat-btn-sm"
                     >
                       {leaveLoading ? '…' : 'Выйти'}
                     </button>
@@ -1789,29 +1767,29 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                 )}
               </div>
             ) : (
-              <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 14 }}>Выберите чат в списке слева</p>
+              <p className="chat-select-hint">Выберите чат в списке слева</p>
             )}
             {currentRoom && roomMembersVisible && (
-              <div style={styles.roomMembersPanel}>
-                <h4 style={{ margin: '0 0 8px', fontSize: 13 }}>Участники</h4>
-                <ul style={{ margin: '0 0 12px', paddingLeft: 0, fontSize: 13, listStyle: 'none' }}>
+              <div className="chat-room-members-panel">
+                <h4 className="chat-panel chat-panel-h4">Участники</h4>
+                <ul className="chat-member-list">
                   {roomMembers.map((m) => {
                     const isMe = m.address === user.user_id
                     const canTransfer = myRole === 'creator' && m.role !== 'creator' && !isMe
                     const canKick = (myRole === 'creator' || myRole === 'admin') && !isMe && m.role !== 'creator' && (myRole === 'creator' || m.role === 'member')
                     return (
-                      <li key={m.user_id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <li key={m.user_id} className="chat-member-item">
                         <span>
-                          {m.address} {m.role !== 'member' && <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>({m.role})</span>}
+                          {m.address} {m.role !== 'member' && <span className="chat-member-role">({m.role})</span>}
                         </span>
                         {(canTransfer || canKick) && (
-                          <span style={{ display: 'flex', gap: 4 }}>
+                          <span className="chat-member-actions-inline">
                             {canTransfer && (
                               <button
                                 type="button"
                                 onClick={() => handleTransferCreator(m.username)}
                                 disabled={!!roomActionLoading}
-                                style={{ ...styles.vpnBtn, padding: '2px 6px', fontSize: 11 }}
+                                className="chat-vpn-btn chat-btn-xs"
                                 title="Передать создание"
                               >
                                 {roomActionLoading === 'transfer' ? '…' : 'Создатель'}
@@ -1822,7 +1800,7 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                                 type="button"
                                 onClick={() => handleRemoveMember(m.username)}
                                 disabled={!!roomActionLoading}
-                                style={{ ...styles.vpnBtnDanger, padding: '2px 6px', fontSize: 11 }}
+                                className="chat-vpn-btn-danger chat-btn-xs"
                                 title="Исключить"
                               >
                                 {roomActionLoading === 'remove' ? '…' : 'Исключить'}
@@ -1834,70 +1812,61 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                     )
                   })}
                 </ul>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div className="chat-member-actions">
                   <input
                     type="text"
                     placeholder="Username для приглашения"
                     value={inviteUsername}
                     onChange={(e) => setInviteUsername(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleInvite()}
-                    style={{ ...styles.recipientInput, flex: 1, padding: '6px 10px', fontSize: 13 }}
+                    className="chat-recipient-input chat-recipient-input-flex"
                   />
-                  <button style={styles.vpnBtn} onClick={handleInvite} disabled={inviteLoading || !inviteUsername.trim()}>
+                  <button className="chat-vpn-btn" onClick={handleInvite} disabled={inviteLoading || !inviteUsername.trim()}>
                     {inviteLoading ? '…' : 'Пригласить'}
                   </button>
                 </div>
               </div>
             )}
             {identityKeyChanged && identityKeyChanged.recipient === normalizeRecipient(recipient, user.user_id) && (
-              <div
-                style={{
-                  margin: '8px 0 0',
-                  padding: '10px 12px',
-                  background: 'rgba(234, 179, 8, 0.15)',
-                  border: '1px solid rgba(234, 179, 8, 0.5)',
-                  borderRadius: 8,
-                  fontSize: 13,
-                }}
-              >
-                <p style={{ margin: '0 0 8px', color: 'var(--text)' }}>
+              <div className="chat-identity-warning">
+                <p>
                   ⚠️ Ключ собеседника изменился. Возможна атака или переустановка.
                 </p>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button type="button" onClick={trustNewKey} style={{ ...styles.vpnBtn, padding: '6px 12px', fontSize: 12 }}>
+                <div className="chat-identity-actions">
+                  <button type="button" onClick={trustNewKey} className="chat-vpn-btn chat-btn-md">
                     Подтвердить новый ключ
                   </button>
-                  <button type="button" onClick={showFingerprint} disabled={fingerprintLoading} style={{ ...styles.vpnBtn, padding: '6px 12px', fontSize: 12 }}>
+                  <button type="button" onClick={showFingerprint} disabled={fingerprintLoading} className="chat-vpn-btn chat-btn-md">
                     {fingerprintLoading ? '…' : 'Проверить отпечаток'}
                   </button>
                 </div>
               </div>
             )}
             {sendHint && (
-              <p style={{ ...styles.inputHint, margin: '6px 0 0', color: sendHintError ? 'var(--error, #ef4444)' : 'var(--accent)' }}>
+              <p className={`chat-input-hint chat-input-hint-dynamic ${sendHintError ? 'chat-input-hint-error' : 'chat-input-hint-accent'}`}>
                 {sendHint}
               </p>
             )}
           </div>
 
-          <div style={styles.messages} className="messages-scroll">
+          <div className="chat-messages messages-scroll">
             {filteredEvents.length === 0 && (
-              <div style={styles.emptyState}>
-                <span style={styles.emptyIcon}>💬</span>
-                <p style={styles.emptyText}>
+              <div className="chat-empty-state">
+                <span className="chat-empty-icon">💬</span>
+                <p className="chat-empty-text">
                   {recipient.trim()
                     ? isRoomAddr(normalizeRecipient(recipient, user.user_id))
                       ? 'Нет сообщений в комнате'
                       : 'Введите получателя и начните диалог'
                     : 'Выберите чат или введите получателя'}
                 </p>
-                <p style={styles.emptyHint}>Сообщения зашифрованы сквозным шифрованием</p>
+                <p className="chat-empty-hint">Сообщения зашифрованы сквозным шифрованием</p>
               </div>
             )}
             {filteredEvents.length > 0 && searchFilteredEvents.length === 0 && searchQuery.trim() && (
-              <div style={styles.emptyState}>
-                <span style={styles.emptyIcon}>🔍</span>
-                <p style={styles.emptyText}>Ничего не найдено по «{searchQuery.trim()}»</p>
+              <div className="chat-empty-state">
+                <span className="chat-empty-icon">🔍</span>
+                <p className="chat-empty-text">Ничего не найдено по «{searchQuery.trim()}»</p>
               </div>
             )}
             {searchFilteredEvents.map((ev) => {
@@ -1907,30 +1876,32 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
               // Наши сообщения из sync зашифрованы для получателя — не показываем [decrypt failed]
               const displayText = isOwn && parsed.type === 'text' && parsed.text === '[decrypt failed]'
                 ? 'Ваше сообщение'
-                : parsed.type === 'text' ? parsed.text : ''
+                : parsed.type === 'text' ? sanitizeForDisplay(parsed.text) : ''
               return (
-                <div key={ev.event_id} style={{ ...styles.bubbleWrap, justifyContent: isOwn ? 'flex-end' : 'flex-start' }}>
-                  <div className="msg-bubble" style={{ ...styles.bubble, ...(isOwn ? styles.bubbleOwn : styles.bubbleIn) }}>
-                    {!isOwn && <span style={styles.sender}>{ev.sender}</span>}
+                <div key={ev.event_id} className={`chat-bubble-wrap ${isOwn ? 'chat-bubble-wrap--own' : ''}`}>
+                  <div className={`msg-bubble chat-bubble ${isOwn ? 'chat-bubble--own' : 'chat-bubble--in'}`}>
+                    {!isOwn && <span className="chat-sender">{ev.sender}</span>}
                     {parsed.type === 'file' ? (
                       <FilePreview
                         contentUri={parsed.content_uri}
                         filename={parsed.filename}
                         size={parsed.size}
                         token={token}
-                        onDownload={() => downloadFileMessage(parsed.content_uri, parsed.filename)}
+                        onDownload={() => downloadFileMessage(parsed.content_uri, parsed.filename, parsed.file_key, parsed.nonce)}
+                        fileKey={parsed.file_key}
+                        nonce={parsed.nonce}
                       />
                     ) : (
-                      <span style={styles.msgText}>{displayText}</span>
+                      <span className="chat-msg-text">{displayText}</span>
                     )}
-                    <div style={styles.bubbleMeta}>
-                      {encrypted && <span style={styles.e2eeBadge} title="Шифрование E2EE">🔒</span>}
+                    <div className="chat-bubble-meta">
+                      {encrypted && <span className="chat-e2ee-badge" title="Шифрование E2EE">🔒</span>}
                       {isOwn && (
-                        <span style={styles.deliveryBadge} title={ev.read_at ? 'Прочитано' : ev.status === 'delivered' ? 'Доставлено' : 'Отправлено'}>
+                        <span className="chat-delivery-badge" title={ev.read_at ? 'Прочитано' : ev.status === 'delivered' ? 'Доставлено' : 'Отправлено'}>
                           {ev.read_at ? '✓✓' : ev.status === 'delivered' ? '✓' : '⋯'}
                         </span>
                       )}
-                      <span style={styles.timestamp}>{formatTime(ev.timestamp)}</span>
+                      <span className="chat-timestamp">{formatTime(ev.timestamp)}</span>
                     </div>
                   </div>
                 </div>
@@ -1939,13 +1910,13 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
             <div ref={messagesEndRef} />
           </div>
 
-          <div style={styles.inputWrap}>
-            <div style={styles.inputBar}>
-              <label style={styles.fileLabel}>
+          <div className="chat-input-wrap">
+            <div className="chat-input-bar">
+              <label className="chat-file-label">
               <input
                 type="file"
                 multiple
-                style={{ display: 'none' }}
+                className="chat-input-hidden"
                 onChange={(e) => {
                   if (e.target.files?.length) sendFiles(e.target.files)
                   e.target.value = ''
@@ -1971,18 +1942,17 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
                 }
               }}
               rows={1}
-              style={{ ...styles.messageInput, minHeight: 44, resize: 'vertical' as const }}
+              className="chat-message-input"
             />
             <button
               onClick={sendMessage}
               disabled={uploading || !recipient || sending}
-              style={styles.sendBtn}
-              className="btn-primary"
+              className="chat-send-btn btn-primary"
             >
               {sending ? '…' : 'Отправить →'}
             </button>
             </div>
-            <p style={styles.inputHint}>Enter — отправить, Shift+Enter — новая строка</p>
+            <p className="chat-input-hint">Enter — отправить, Shift+Enter — новая строка</p>
           </div>
         </div>
         </>
@@ -1994,49 +1964,24 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
           role="dialog"
           aria-modal="true"
           aria-labelledby="fingerprint-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 1000,
-            background: 'rgba(0,0,0,0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
+          className="chat-fingerprint-backdrop"
           onClick={close}
         >
           <div
-            style={{
-              background: 'var(--surface)',
-              borderRadius: 12,
-              padding: 24,
-              maxWidth: 400,
-              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
-            }}
+            className="chat-fingerprint-dialog"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 id="fingerprint-title" style={{ margin: '0 0 12px', fontSize: 18 }}>Отпечаток ключа (Safety number)</h3>
-            <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--text-muted)' }}>
+            <h3 id="fingerprint-title" className="chat-fingerprint-title">Отпечаток ключа (Safety number)</h3>
+            <p className="chat-fingerprint-desc">
               Сравните с {fingerprintModal.recipient} лично. Если совпадает — канал защищён от MITM.
             </p>
-            <pre
-              style={{
-                margin: 0,
-                padding: 12,
-                background: 'var(--bg)',
-                borderRadius: 8,
-                fontSize: 13,
-                letterSpacing: 0.5,
-                wordBreak: 'break-all',
-                whiteSpace: 'pre-wrap',
-              }}
-            >
+            <pre className="chat-fingerprint-pre">
               {fingerprintModal.safetyNumber}
             </pre>
             <button
               type="button"
               onClick={close}
-              style={{ ...styles.vpnBtn, marginTop: 16 }}
+              className="chat-vpn-btn chat-fingerprint-close"
             >
               Закрыть
             </button>
@@ -2047,317 +1992,4 @@ export function Chat({ user, token, keys, onLogout }: ChatProps) {
       </main>
     </div>
   )
-}
-
-const styles: Record<string, React.CSSProperties> = {
-  layout: {
-    display: 'flex',
-    flexDirection: 'column',
-    height: '100vh',
-  },
-  header: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '12px 24px',
-    borderBottom: '1px solid var(--border)',
-    background: 'var(--surface)',
-  },
-  headerLeft: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-  },
-  headerUser: {
-    fontSize: 14,
-    fontWeight: 500,
-    color: 'var(--text)',
-  },
-  e2eeStatus: {
-    fontSize: 14,
-  },
-  headerActions: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 12,
-  },
-  tabBtn: {
-    padding: '6px 14px',
-    borderRadius: 8,
-    border: '1px solid var(--border)',
-    background: 'var(--bg)',
-    color: 'var(--text)',
-    fontSize: 13,
-    cursor: 'pointer',
-  },
-  tabBtnActive: {
-    background: 'var(--accent-subtle)',
-    borderColor: 'var(--accent)',
-    color: 'var(--accent)',
-  },
-  themeBtn: {
-    background: 'none',
-    border: '1px solid var(--border)',
-    color: 'var(--text)',
-    padding: '8px 12px',
-    borderRadius: 8,
-    cursor: 'pointer',
-    fontSize: 18,
-  },
-  logout: {
-    background: 'none',
-    border: '1px solid var(--border)',
-    color: 'var(--text)',
-    padding: '8px 16px',
-    borderRadius: 8,
-    cursor: 'pointer',
-    fontSize: 14,
-  },
-  main: {
-    display: 'flex',
-    flex: 1,
-    overflow: 'hidden',
-  },
-  sidebar: {
-    width: 260,
-    borderRight: '1px solid var(--border)',
-    padding: 20,
-    background: 'var(--surface)',
-    overflowY: 'auto',
-  },
-  sidebarSection: {
-    marginBottom: 20,
-  },
-  sidebarTitle: {
-    margin: '0 0 8px',
-    fontSize: 15,
-    fontWeight: 600,
-  },
-  hint: {
-    fontSize: 12,
-    color: 'var(--text-muted)',
-  },
-  vpnSection: {
-    marginTop: 24,
-    paddingTop: 16,
-    borderTop: '1px solid var(--border)',
-  },
-  vpnTitle: { margin: '0 0 8px', fontSize: 14 },
-  vpnHint: { fontSize: 11, color: 'var(--text-muted)', margin: '0 0 12px' },
-  vpnProtocol: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: 8,
-    marginBottom: 12,
-  },
-  vpnProtoHint: { fontSize: 11, color: 'var(--text-muted)', margin: '4px 0 0' },
-  vpnBtn: {
-    flexShrink: 0,
-    padding: '6px 12px',
-    borderRadius: 6,
-    border: '1px solid var(--border)',
-    background: 'var(--surface)',
-    color: 'var(--text)',
-    cursor: 'pointer',
-    fontSize: 12,
-  },
-  vpnBtnDanger: {
-    flexShrink: 0,
-    padding: '6px 12px',
-    borderRadius: 6,
-    border: '1px solid var(--accent)',
-    background: 'transparent',
-    color: 'var(--accent)',
-    cursor: 'pointer',
-    fontSize: 12,
-  },
-  vpnAdminSection: {
-    marginTop: 24,
-    paddingTop: 16,
-    borderTop: '1px solid var(--border)',
-  },
-  vpnAdminRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: 8,
-    marginBottom: 12,
-  },
-  vpnAdminActions: { display: 'flex', gap: 4 },
-  roomItem: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    textAlign: 'left',
-    padding: '8px 12px',
-    borderRadius: 8,
-    border: '1px solid transparent',
-    background: 'transparent',
-    color: 'var(--text)',
-    cursor: 'pointer',
-    fontSize: 13,
-  },
-  unreadBadge: {
-    minWidth: 20,
-    padding: '2px 6px',
-    borderRadius: 10,
-    background: 'var(--accent)',
-    color: 'white',
-    fontSize: 11,
-    fontWeight: 600,
-  },
-  deliveryBadge: {
-    opacity: 0.8,
-    fontSize: 12,
-    marginRight: 2,
-  },
-  roomMembersPanel: {
-    marginTop: 12,
-    padding: 12,
-    background: 'var(--bg)',
-    borderRadius: 8,
-    border: '1px solid var(--border)',
-  },
-  chat: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-  },
-  recipientBar: {
-    padding: 12,
-    borderBottom: '1px solid var(--border)',
-    background: 'var(--surface)',
-  },
-  recipientRow: { width: '100%' },
-  chatWith: {
-    margin: '8px 0 0',
-    fontSize: 13,
-    color: 'var(--accent)',
-    fontWeight: 500,
-  },
-  recipientInput: {
-    width: '100%',
-    padding: 10,
-    borderRadius: 8,
-    border: '1px solid var(--border)',
-    background: 'var(--bg)',
-    color: 'var(--text)',
-  },
-  messages: {
-    flex: 1,
-    overflow: 'auto',
-    padding: 16,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-    background: 'var(--bg-chat)',
-  },
-  bubbleWrap: {
-    display: 'flex',
-    width: '100%',
-  },
-  bubble: {
-    padding: '10px 14px',
-    borderRadius: 16,
-    maxWidth: '75%',
-    wordBreak: 'break-word',
-  },
-  bubbleOwn: {
-    background: 'var(--bubble-own)',
-    color: 'var(--bubble-own-text)',
-    borderBottomRightRadius: 4,
-  },
-  bubbleIn: {
-    background: 'var(--bubble-in)',
-    border: '1px solid var(--bubble-in-border)',
-    borderBottomLeftRadius: 4,
-  },
-  emptyState: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    padding: 32,
-    color: 'var(--text-muted)',
-  },
-  emptyIcon: { fontSize: 48, opacity: 0.5 },
-  emptyText: { margin: 0, fontSize: 16, fontWeight: 500, color: 'var(--text)' },
-  emptyHint: { margin: 0, fontSize: 13 },
-  sender: {
-    display: 'block',
-    fontSize: 12,
-    color: 'var(--accent)',
-    marginBottom: 4,
-    fontWeight: 500,
-  },
-  msgText: { fontSize: 15, lineHeight: 1.5, display: 'block' },
-  msgFile: {
-    fontSize: 14,
-    display: 'block',
-    padding: '8px 12px',
-    background: 'rgba(0,0,0,0.1)',
-    borderRadius: 8,
-    border: '1px dashed var(--border)',
-  },
-  fileLink: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    background: 'none',
-    border: 'none',
-    color: 'inherit',
-    cursor: 'pointer',
-    padding: 0,
-    font: 'inherit',
-    textDecoration: 'underline',
-  },
-  bubbleMeta: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: 6,
-    marginTop: 4,
-  },
-  e2eeBadge: { fontSize: 11, opacity: 0.9 },
-  timestamp: { fontSize: 11, opacity: 0.7 },
-  inputWrap: {
-    padding: 16,
-    paddingTop: 12,
-    borderTop: '1px solid var(--border)',
-    background: 'var(--surface)',
-  },
-  inputBar: {
-    display: 'flex',
-    gap: 8,
-    alignItems: 'center',
-  },
-  inputHint: {
-    margin: '6px 0 0',
-    fontSize: 11,
-    color: 'var(--text-muted)',
-  },
-  fileLabel: {
-    cursor: 'pointer',
-    padding: 8,
-    fontSize: 18,
-  },
-  messageInput: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 8,
-    border: '1px solid var(--border)',
-    background: 'var(--bg)',
-    color: 'var(--text)',
-  },
-  sendBtn: {
-    padding: '12px 24px',
-    borderRadius: 8,
-    background: 'var(--accent)',
-    color: 'white',
-    border: 'none',
-    cursor: 'pointer',
-    fontWeight: 600,
-  },
 }

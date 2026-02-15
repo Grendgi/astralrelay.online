@@ -23,6 +23,7 @@ export interface StoredKeys {
   identityKey: string
   identitySecret: string
   signedPrekey: { key: string; signature: string; secret: string; key_id?: number }
+  oneTimePrekeys?: Array<{ key_id: number; pub: string; priv: string }>
 }
 
 /** Derive Signal device ID from backend device UUID. Must match server's UUIDToSignalDeviceID. */
@@ -71,6 +72,35 @@ function bundleToDeviceType(
 }
 
 import { IndexedDBSignalStore } from './signal-store'
+import { removeOtpkFromStorage } from './key-storage'
+
+type SignalStoreLike = Pick<IndexedDBSignalStore, 'get' | 'put' | 'remove' | 'getIdentityKeyPair' | 'getLocalRegistrationId' | 'isTrustedIdentity' | 'loadPreKey' | 'loadSignedPreKey' | 'loadSession' | 'saveIdentity' | 'storeIdentityKeyPair' | 'storeLocalRegistrationId' | 'storePreKey' | 'storeSignedPreKey' | 'storeSession' | 'removePreKey' | 'removeSignedPreKey' | 'loadIdentityKey'>
+
+function createStoreWithOtpkSync(base: IndexedDBSignalStore): SignalStoreLike {
+  return {
+    get: (k, d) => base.get(k, d),
+    put: (k, v) => base.put(k, v),
+    remove: (k) => base.remove(k),
+    getIdentityKeyPair: () => base.getIdentityKeyPair(),
+    getLocalRegistrationId: () => base.getLocalRegistrationId(),
+    isTrustedIdentity: () => base.isTrustedIdentity(),
+    loadPreKey: (id) => base.loadPreKey(id),
+    loadSignedPreKey: (id) => base.loadSignedPreKey(id),
+    loadSession: (id) => base.loadSession(id),
+    saveIdentity: () => base.saveIdentity(),
+    storeIdentityKeyPair: (kp) => base.storeIdentityKeyPair(kp),
+    storeLocalRegistrationId: (id) => base.storeLocalRegistrationId(id),
+    storePreKey: (id, kp) => base.storePreKey(id, kp),
+    storeSignedPreKey: (id, kp) => base.storeSignedPreKey(id, kp),
+    storeSession: (id, r) => base.storeSession(id, r),
+    removePreKey: async (keyId) => {
+      await removeOtpkFromStorage(typeof keyId === 'string' ? parseInt(keyId, 10) : keyId)
+      await base.removePreKey(keyId)
+    },
+    removeSignedPreKey: (id) => base.removeSignedPreKey(id),
+    loadIdentityKey: () => base.loadIdentityKey(),
+  }
+}
 
 /** Get or create persistent registrationId (uint16). Never overwrite existing. */
 async function getOrCreateRegistrationId(store: IndexedDBSignalStore): Promise<number> {
@@ -96,6 +126,15 @@ async function initStore(store: IndexedDBSignalStore, keys: StoredKeys): Promise
   }
   const spkId = keys.signedPrekey.key_id ?? 1
   await store.storeSignedPreKey(spkId, signedPreKeyPair)
+
+  for (const otpk of keys.oneTimePrekeys ?? []) {
+    if (otpk.priv) {
+      await store.storePreKey(otpk.key_id, {
+        pubKey: b64ToBuf(otpk.pub),
+        privKey: b64ToBuf(otpk.priv),
+      })
+    }
+  }
 }
 
 /**
@@ -110,8 +149,9 @@ export async function signalEncrypt(
   deviceId?: number
 ): Promise<string> {
   const lib = await import('@privacyresearch/libsignal-protocol-typescript')
-  const store = new IndexedDBSignalStore()
-  await initStore(store, ourKeys)
+  const base = new IndexedDBSignalStore()
+  await initStore(base, ourKeys)
+  const store = createStoreWithOtpkSync(base)
 
   const sigDeviceId = deviceId ?? bundleSignalDeviceId(recipientBundle)
   const address = new lib.SignalProtocolAddress(recipientAddr, sigDeviceId)
@@ -143,8 +183,9 @@ export async function signalDecrypt(
   if (!ciphertext.startsWith(SIGNAL_PREFIX)) throw new Error('Not Signal format')
 
   const lib = await import('@privacyresearch/libsignal-protocol-typescript')
-  const store = new IndexedDBSignalStore()
-  await initStore(store, ourKeys)
+  const base = new IndexedDBSignalStore()
+  await initStore(base, ourKeys)
+  const store = createStoreWithOtpkSync(base)
 
   const sigDeviceId =
     typeof senderDeviceId === 'number'
