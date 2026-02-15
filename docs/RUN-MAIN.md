@@ -36,6 +36,18 @@ cp deploy/main/.env.example deploy/main/.env
 - Проверьте, что DNS для `SERVER_DOMAIN` указывает на IP сервера.
 - Перезапуск: из корня репозитория `docker compose -p main -f deploy/main/docker-compose.yml --env-file deploy/main/.env up -d --build`.
 
+### main-server падает: «invalid port» после host
+
+Пароль PostgreSQL содержит символы `/` или `+`, из‑за чего ломается URL в `DATABASE_URL`. Замените пароль на безопасный (только буквы/цифры, без `+` и `/`):
+
+1. Задайте новый пароль в `.env`: `POSTGRES_PASSWORD=новый_пароль_только_буквы_цифры`
+2. Обновите пароль в Postgres и перезапустите server:
+   ```bash
+   docker exec -it main-postgres-1 psql -U messenger -d messenger -c "ALTER USER messenger PASSWORD 'новый_пароль_только_буквы_цифры';"
+   docker restart main-server-1
+   ```
+   (подставьте тот же пароль, что в шаге 1)
+
 ## Профиль ha (реплика PostgreSQL)
 
 ```bash

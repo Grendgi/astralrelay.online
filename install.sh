@@ -190,6 +190,14 @@ rand_base64() {
   openssl rand -base64 "$n" 2>/dev/null || head -c 32 /dev/urandom | base64 2>/dev/null || echo "change-me"
 }
 
+# Пароль без + и / — иначе ломается DATABASE_URL (postgres://user:PASS@host/...)
+rand_base64_urlsafe() {
+  n="${1:-24}"
+  raw="$(openssl rand -base64 "$n" 2>/dev/null || head -c "$((n*2))" /dev/urandom | base64 2>/dev/null)"
+  [ -z "$raw" ] && raw="change-me"
+  echo "$raw" | tr '+/' '-_'
+}
+
 detect_domain_default() {
   ip="$(curl -s --max-time 10 -4 icanhazip.com 2>/dev/null || curl -s --max-time 10 -4 ifconfig.me 2>/dev/null || echo "")"
   if [ -z "$ip" ]; then
@@ -360,8 +368,8 @@ fi
 
 # secrets idempotent
 set_if_missing "JWT_SECRET" "$(rand_base64 32)" "$ENV_FILE"
-set_if_missing "POSTGRES_PASSWORD" "$(rand_base64 24)" "$ENV_FILE"
-set_if_missing "MINIO_ROOT_PASSWORD" "$(rand_base64 24)" "$ENV_FILE"
+set_if_missing "POSTGRES_PASSWORD" "$(rand_base64_urlsafe 24)" "$ENV_FILE"
+set_if_missing "MINIO_ROOT_PASSWORD" "$(rand_base64_urlsafe 24)" "$ENV_FILE"
 set_if_missing "DB_ENCRYPTION_KEY" "$(rand_base64 32)" "$ENV_FILE"
 
 # LetsEncrypt email (если домен не localhost)
