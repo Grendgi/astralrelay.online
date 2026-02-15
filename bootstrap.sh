@@ -1,14 +1,4 @@
 #!/usr/bin/env sh
-# Одна команда — полная установка с нуля
-# Запуск:
-#   curl -fsSL https://raw.githubusercontent.com/Grendgi/astralrelay.online/main/bootstrap.sh | sudo sh
-#
-# Переменные:
-#   REPO_URL, BRANCH
-#   EXPECTED_COMMIT (или старое EXPECTED_SHA256) — префикс commit hash (не SHA256)
-#   BOOTSTRAP_DIFF=1 — скачать во временный каталог → diff → подтверждение
-#   INSTALL_DIR=/opt/astralrelay.online
-
 set -e
 
 echo "=== astralrelay.online — установка в один клик ==="
@@ -17,19 +7,17 @@ echo ""
 REPO_URL="${REPO_URL:-https://github.com/Grendgi/astralrelay.online}"
 BRANCH="${BRANCH:-main}"
 
-# Backward compatible: EXPECTED_SHA256 раньше использовался как префикс commit
+# Backward compat: раньше EXPECTED_SHA256 использовался как префикс commit
 EXPECTED_COMMIT="${EXPECTED_COMMIT:-${EXPECTED_SHA256:-}}"
 
 BOOTSTRAP_DIFF="${BOOTSTRAP_DIFF:-0}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/astralrelay.online}"
 STAGING_DIR=""
 
-cleanup_staging() {
-  if [ -n "$STAGING_DIR" ] && [ -d "$STAGING_DIR" ]; then
-    rm -rf "$STAGING_DIR"
-  fi
+cleanup() {
+  [ -n "$STAGING_DIR" ] && [ -d "$STAGING_DIR" ] && rm -rf "$STAGING_DIR" || true
 }
-trap cleanup_staging EXIT
+trap cleanup EXIT
 
 do_download() {
   dest="$1"
@@ -37,25 +25,18 @@ do_download() {
 
   if command -v git >/dev/null 2>&1; then
     if [ -d "$dest/.git" ]; then
-      (cd "$dest" && \
-        git fetch -q origin "$BRANCH" && \
-        git checkout -q "$BRANCH" 2>/dev/null || true)
-
-      # Жёстко приводим к origin/$BRANCH для идемпотентности
-      (cd "$dest" && \
-        git fetch -q origin "$BRANCH" && \
-        git reset -q --hard "origin/$BRANCH" >/dev/null 2>&1 || true)
+      (cd "$dest" && git fetch -q origin "$BRANCH" && git reset -q --hard "origin/$BRANCH")
     else
       rm -rf "$dest"
       git clone -q --depth 1 -b "$BRANCH" "$REPO_URL" "$dest"
     fi
   else
     rm -rf "$dest"
-    TMP_DIR="$(mktemp -d)"
-    curl -fsSL "$REPO_URL/archive/$BRANCH.tar.gz" | tar xz -C "$TMP_DIR"
-    subdir="$(ls -1 "$TMP_DIR" | head -1)"
-    mv "$TMP_DIR/$subdir" "$dest"
-    rm -rf "$TMP_DIR"
+    tmp="$(mktemp -d)"
+    curl -fsSL "$REPO_URL/archive/$BRANCH.tar.gz" | tar xz -C "$tmp"
+    subdir="$(ls -1 "$tmp" | head -1)"
+    mv "$tmp/$subdir" "$dest"
+    rm -rf "$tmp"
   fi
 }
 
@@ -68,16 +49,16 @@ if [ "$BOOTSTRAP_DIFF" = "1" ] || [ "$BOOTSTRAP_DIFF" = "true" ]; then
     echo ""
     echo "--- diff install.sh (новое vs текущее) ---"
     diff -u "$INSTALL_DIR/install.sh" "$STAGING_DIR/install.sh" 2>/dev/null || true
-    if [ -f "$INSTALL_DIR/install-selfhost.sh" ] && [ -f "$STAGING_DIR/install-selfhost.sh" ]; then
-      echo "--- diff install-selfhost.sh ---"
-      diff -u "$INSTALL_DIR/install-selfhost.sh" "$STAGING_DIR/install-selfhost.sh" 2>/dev/null || true
-    fi
+    echo "--- diff install-selfhost.sh ---"
+    diff -u "$INSTALL_DIR/install-selfhost.sh" "$STAGING_DIR/install-selfhost.sh" 2>/dev/null || true
+    echo "--- diff bootstrap.sh ---"
+    diff -u "$INSTALL_DIR/bootstrap.sh" "$STAGING_DIR/bootstrap.sh" 2>/dev/null || true
     echo "--- конец diff ---"
     echo ""
-    printf "Применить и запустить установку? [y/N] "
-    read -r confirm </dev/tty 2>/dev/null || true
+    printf "Применить изменения и запустить установку? [y/N] "
+    read -r confirm </dev/tty 2>/dev/null || confirm=""
     case "$confirm" in
-      [yY][eE][sS]|[yY]) ;;
+      [yY]|[yY][eE][sS]) ;;
       *) echo "Отменено."; exit 0 ;;
     esac
   fi
@@ -92,27 +73,25 @@ fi
 
 cd "$INSTALL_DIR" || exit 1
 
-COMMIT_HASH=""
+COMMIT=""
 if [ -d ".git" ]; then
-  COMMIT_HASH="$(git rev-parse HEAD 2>/dev/null || true)"
+  COMMIT="$(git rev-parse HEAD 2>/dev/null || true)"
 fi
+[ -n "$COMMIT" ] && echo "Версия: $COMMIT"
 
-if [ -n "$COMMIT_HASH" ]; then
-  echo "Версия: $COMMIT_HASH"
-fi
-
-if [ -n "$EXPECTED_COMMIT" ] && [ -n "$COMMIT_HASH" ]; then
-  case "$COMMIT_HASH" in
+if [ -n "$EXPECTED_COMMIT" ] && [ -n "$COMMIT" ]; then
+  case "$COMMIT" in
     "$EXPECTED_COMMIT"*) ;;
     *)
-      echo "Ошибка: ожидался commit prefix $EXPECTED_COMMIT, получен $COMMIT_HASH"
+      echo "Ошибка: ожидался commit prefix $EXPECTED_COMMIT, получен $COMMIT"
       exit 1
       ;;
   esac
 fi
 
-# Важно: всегда запускаем через sh, чтобы не зависеть от chmod +x
-INSTALL_AUTO=1 INSTALL_MODE="${INSTALL_MODE:-selfhost}" sh ./install.sh
-
-echo ""
-echo "Установка завершена. Данные: $INSTALL_DIR${COMMIT_HASH:+ (commit $COMMIT_HASH)}"
+# Если есть TTY и пользователь не просит авто-режим — запускаем wizard
+if [ -t 0 ] && [ "${INSTALL_AUTO:-}" != "1" ]; then
+  sh ./install.sh --wizard
+else
+  INSTALL_AUTO=1 INSTALL_MODE="${INSTALL_MODE:-selfhost}" sh ./install.sh
+fi
