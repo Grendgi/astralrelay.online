@@ -46,6 +46,7 @@ function FilePreview({
   nonce,
   fileSha256,
   chunkSize,
+  e2eeVersion,
 }: {
   contentUri: string
   filename: string
@@ -57,6 +58,7 @@ function FilePreview({
   nonce?: string
   fileSha256?: string
   chunkSize?: number
+  e2eeVersion?: number
 }) {
   const [url, setUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -104,6 +106,7 @@ function FilePreview({
         }
         let blob: Blob = await res.blob()
         if (fileKey && (nonce || chunkSize)) {
+          validateAttachmentVersion(e2eeVersion)
           const ciphertext = new Uint8Array(await blob.arrayBuffer())
           const plain = await decryptAttachment(ciphertext, fileKey, nonce ?? '', fileSha256, chunkSize)
           blob = new Blob([plain as BlobPart])
@@ -136,7 +139,7 @@ function FilePreview({
         return null
       })
     }
-  }, [contentUri, token, canPreview, filename, lazy, inView, fileKey, nonce, fileSha256, chunkSize])
+  }, [contentUri, token, canPreview, filename, lazy, inView, fileKey, nonce, fileSha256, chunkSize, e2eeVersion])
 
   const sizeStr = size != null ? formatFileSize(size) : null
 
@@ -248,15 +251,26 @@ function FilePreview({
 
   return wrap(null)
 }
-import { encrypt, decrypt, isE2EEPayload, encryptAttachment, decryptAttachment, E2EE_ATTACHMENT_VERSION } from '../crypto/e2ee'
+import { encrypt, decrypt, isE2EEPayload, encryptAttachmentFromFile, decryptAttachment, E2EE_ATTACHMENT_VERSION, MAX_ATTACHMENT_SIZE, isValidBase64, validateAttachmentVersion } from '../crypto/e2ee'
 import { computeSafetyNumber } from '../crypto/fingerprint'
 import { safetyNumberToQRDataUrl } from '../crypto/fingerprint-qr'
-import { signalEncrypt, signalDecrypt, isSignalCiphertext, uuidToSignalDeviceId } from '../crypto/signal'
+import { signalEncrypt, signalDecrypt, isSignalCiphertext, uuidToSignalDeviceId, deleteSessionForRecipientDevice } from '../crypto/signal'
+import {
+  generateSenderKey,
+  storeSenderKey,
+  getSenderKey,
+  deleteSenderKey,
+  encryptWithSenderKey,
+  decryptWithSenderKey,
+  buildDistributionPayload,
+  parseDistributionPayload,
+  memberSetEquals,
+} from '../crypto/sender-keys'
 import { getE2EEMode, setE2EEMode, type E2EEMode } from '../crypto/e2ee-mode'
-import { getStoredIdentityKey, setStoredIdentityKey, checkIdentityKeyChange, markVerified, getTrustedKeysForBackup, restoreTrustedKeysFromBackup, getTrustState } from '../crypto/trusted-keys'
+import { getStoredIdentityKey, setStoredIdentityKey, checkIdentityKeyChange, markVerified, clearVerified, getTrustedKeysForBackup, restoreTrustedKeysFromBackup, getRecipientHasVerifiedDevice, getTrustState } from '../crypto/trusted-keys'
 import { createBackup, restoreBackup } from '../crypto/backup'
 import { logError } from '../utils/safe-log'
-import { sanitizeForDisplay } from '../utils/sanitize'
+import { sanitizeForDisplay, sanitizeFilename } from '../utils/sanitize'
 import { generateOneTimePrekeys, generateSignedPrekey } from '../crypto/keys'
 import { useTheme } from '../hooks/useTheme'
 
@@ -277,6 +291,12 @@ function formatTime(ts: number): string {
   const now = new Date()
   const isToday = d.toDateString() === now.toDateString()
   return isToday ? d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+function formatTrustDate(ms?: number): string {
+  if (ms == null) return '—'
+  const d = new Date(ms)
+  return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 /** Нормализует recipient в MXID/room ID: если нет домена — добавляет домен текущего пользователя */
@@ -340,9 +360,10 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
   }, [mainView])
   const [leaveLoading, setLeaveLoading] = useState(false)
   const [roomActionLoading, setRoomActionLoading] = useState<string | null>(null)
-  const [devices, setDevices] = useState<Array<{ device_id: string; created_at: string; is_current: boolean }>>([])
+  const [devices, setDevices] = useState<Array<{ device_id: string; name?: string; created_at: string; is_current: boolean }>>([])
   const [devicesLoading, setDevicesLoading] = useState(false)
   const [devicesRevokeLoading, setDevicesRevokeLoading] = useState<string | null>(null)
+  const [devicesRenameLoading, setDevicesRenameLoading] = useState<string | null>(null)
   const [soundEnabled, setSoundEnabled] = useState(() => {
     try {
       return localStorage.getItem('chat_sound_enabled') !== 'false'
@@ -351,16 +372,17 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
   const [pushEnabled, setPushEnabled] = useState(false)
   const [pushLoading, setPushLoading] = useState(false)
   const [decryptedSignal, setDecryptedSignal] = useState<Record<string, string>>({})
-  const [fingerprintModal, setFingerprintModal] = useState<{ recipient: string; safetyNumber: string } | null>(null)
+  const [fingerprintModal, setFingerprintModal] = useState<{ recipient: string; safetyNumber: string; identityKey?: string; deviceId?: string; trustHistory?: { seenAt?: number; verifiedAt?: number; changedAt?: number; status?: string } } | null>(null)
   const [fingerprintQrUrl, setFingerprintQrUrl] = useState<string | null>(null)
   const [fingerprintLoading, setFingerprintLoading] = useState(false)
   const [fingerprintCopied, setFingerprintCopied] = useState(false)
+  const [backupRestoredHint, setBackupRestoredHint] = useState(() => !!sessionStorage.getItem('backup_restored'))
   const [e2eeMode, setE2eeModeState] = useState<E2EEMode>(() => getE2EEMode())
   const setE2eeMode = (m: E2EEMode) => {
     setE2eeModeState(m)
     setE2EEMode(m)
   }
-  const [identityKeyChanged, setIdentityKeyChanged] = useState<{ recipient: string; newKey: string } | null>(null)
+  const [identityKeyChanged, setIdentityKeyChanged] = useState<{ recipient: string; newKey: string; deviceId?: string } | null>(null)
   useEffect(() => {
     if ('serviceWorker' in navigator && 'PushManager' in window && Notification.permission === 'granted') {
       navigator.serviceWorker.ready.then((reg) => {
@@ -401,7 +423,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
 
   const trustNewKey = useCallback(async () => {
     if (!identityKeyChanged) return
-    await setStoredIdentityKey(identityKeyChanged.recipient, identityKeyChanged.newKey)
+    await setStoredIdentityKey(identityKeyChanged.recipient, identityKeyChanged.newKey, identityKeyChanged.deviceId)
     setIdentityKeyChanged(null)
   }, [identityKeyChanged])
 
@@ -413,7 +435,11 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
     try {
       const bundle = await api.getKeys(r, token)
       const safetyNumber = await computeSafetyNumber(keys.identityKey, bundle.identity_key)
-      setFingerprintModal({ recipient: r, safetyNumber })
+      const trust = await getTrustState(r, bundle.identity_key, bundle.device_id)
+      const trustHistory = trust
+        ? { seenAt: trust.seenAt, verifiedAt: trust.verifiedAt, changedAt: trust.changedAt, status: trust.status }
+        : undefined
+      setFingerprintModal({ recipient: r, safetyNumber, identityKey: bundle.identity_key, deviceId: bundle.device_id, trustHistory })
     } catch {
       setFingerprintModal({ recipient: r, safetyNumber: '— ключи недоступны —' })
     } finally {
@@ -432,13 +458,13 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
     api.getKeys(r, token)
       .then(async (bundle) => {
         if (cancelled) return
-        const res = await checkIdentityKeyChange(r, bundle.identity_key)
+        const res = await checkIdentityKeyChange(r, bundle.identity_key, bundle.device_id)
         if (res.changed) {
-          setIdentityKeyChanged({ recipient: r, newKey: bundle.identity_key })
+          setIdentityKeyChanged({ recipient: r, newKey: bundle.identity_key, deviceId: bundle.device_id })
         } else {
           setIdentityKeyChanged(null)
-          const stored = await getStoredIdentityKey(r)
-          if (!stored) await setStoredIdentityKey(r, bundle.identity_key)
+          const stored = await getStoredIdentityKey(r, bundle.device_id)
+          if (!stored) await setStoredIdentityKey(r, bundle.identity_key, bundle.device_id)
         }
       })
       .catch(() => {
@@ -451,28 +477,64 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [events, recipient])
 
-  // Асинхронная расшифровка Signal (sig1:) сообщений
+  // Асинхронная расшифровка Signal (sig1:) и Sender Key (sk1:) сообщений
   useEffect(() => {
-    if (!keys?.identitySecret || !keys?.signedPrekey?.secret) return
-    const ourKeys = { identityKey: keys.identityKey, identitySecret: keys.identitySecret, signedPrekey: keys.signedPrekey }
-    events
-      .filter((ev) => ev.ciphertext?.startsWith('sig1:'))
-      .forEach((ev) => {
-        signalDecrypt(ev.ciphertext!, ourKeys, ev.sender, ev.sender_device).then(
-          (plain) => setDecryptedSignal((prev) => (prev[ev.event_id] ? prev : { ...prev, [ev.event_id]: plain })),
+    const ourKeys = keys ? { identityKey: keys.identityKey, identitySecret: keys.identitySecret, signedPrekey: keys.signedPrekey } : null
+    events.forEach((ev) => {
+      const ct = ev.ciphertext
+      if (!ct) return
+      if (ct.startsWith('sig1:')) {
+        if (!ourKeys?.identitySecret || !ourKeys?.signedPrekey?.secret) return
+        signalDecrypt(ct, ourKeys, ev.sender, ev.sender_device).then(
+          (plain) => {
+            const dist = parseDistributionPayload(plain)
+            if (dist) {
+              const bin = atob(dist.key)
+              const arr = new Uint8Array(bin.length)
+              for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i)
+              storeSenderKey(dist.roomId, dist.senderId, dist.senderDeviceId, arr, dist.keyId).catch(() => {})
+              plain = dist.body ?? '[key received]'
+            }
+            setDecryptedSignal((prev) => (prev[ev.event_id] ? prev : { ...prev, [ev.event_id]: plain }))
+          },
           () => setDecryptedSignal((prev) => (prev[ev.event_id] ? prev : { ...prev, [ev.event_id]: '[decrypt failed]' }))
         )
-      })
+      } else if (ct.startsWith('sk1:')) {
+        const roomId = ev.recipient?.startsWith('!') ? ev.recipient.slice(1).split(':')[0] : ''
+        if (!roomId || !ev.sender || !ev.sender_device) return
+        getSenderKey(roomId, ev.sender, ev.sender_device)
+          .then((sk) => {
+            if (!sk) {
+              setDecryptedSignal((prev) => (prev[ev.event_id] ? prev : { ...prev, [ev.event_id]: '[no sender key]' }))
+              return
+            }
+            const plain = decryptWithSenderKey(ct, sk.key)
+            setDecryptedSignal((prev) => (prev[ev.event_id] ? prev : { ...prev, [ev.event_id]: plain }))
+          })
+          .catch(() => setDecryptedSignal((prev) => (prev[ev.event_id] ? prev : { ...prev, [ev.event_id]: '[decrypt failed]' })))
+      }
+    })
   }, [events, keys])
 
   const sync = useCallback(async () => {
     try {
       const res = await api.sync(cursor, token)
       if (res.events.length) {
+        // API returns ciphertext as base64; decode for sig1/sk1 (raw prefix+base64)
+        const norm = (e: SyncEvent) => {
+          let ct = e.ciphertext
+          if (ct) {
+            try {
+              const d = atob(ct)
+              if (d.startsWith('sig1:') || d.startsWith('sk1:')) ct = d
+            } catch { /* keep as-is */ }
+          }
+          return { ...e, ciphertext: ct }
+        }
         let newIncomingCount = 0
         setEvents((prev) => {
           const ids = new Set(prev.map((e) => e.event_id))
-          const newEvents = res.events.filter((e) => !ids.has(e.event_id))
+          const newEvents = res.events.filter((e) => !ids.has(e.event_id)).map(norm)
           newIncomingCount = newEvents.filter((e) => e.sender !== user.user_id).length
           return newEvents.length ? [...prev, ...newEvents] : prev
         })
@@ -503,37 +565,46 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
     }
   }, [mainView, token])
 
-  // Keys hygiene: replenish OTPK when < 20; rotate signed prekey when > 7 days old
+  // Keys hygiene: replenish OTPK when < 20; rotate signed prekey when > 7 days old.
+  // Lock serializes refreshes to avoid races; server has ON CONFLICT DO NOTHING for OTPK key_id.
   const REPLENISH_THRESHOLD = 20
   const REPLENISH_COUNT = 50
   const SIGNED_PREKEY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+  const keysRefreshLockRef = useRef<Promise<void>>(Promise.resolve())
   useEffect(() => {
     if (!keys || !token) return
     let cancelled = false
-    api.getKeysStatus(token)
-      .then(async (st) => {
+    const prevLock = keysRefreshLockRef.current
+    const ourRefresh = (async () => {
+      await prevLock
+      if (cancelled) return
+      const st = await api.getKeysStatus(token)
+      if (cancelled) return
+      const updates: Parameters<typeof api.updateKeys>[0] = {}
+      let newPrekeys: import('../crypto/keys').OneTimePrekeyEntry[] = []
+      if (st.unconsumed_prekeys < REPLENISH_THRESHOLD) {
+        newPrekeys = generateOneTimePrekeys(REPLENISH_COUNT, st.next_one_time_key_id)
+        updates.one_time_prekeys = newPrekeys.map((o) => ({ key: o.pub, key_id: o.key_id }))
+      }
+      let newSpk: { key: string; signature: string; secret: string; key_id: number } | undefined
+      const spkUpdated = new Date(st.signed_prekey_updated_at).getTime()
+      if (keys.identitySigningSecret && keys.identitySigningKey && Date.now() - spkUpdated > SIGNED_PREKEY_MAX_AGE_MS) {
+        const nextId = (keys.signedPrekey.key_id ?? 1) + 1
+        newSpk = generateSignedPrekey(keys.identitySigningSecret, nextId)
+        updates.signed_prekey = { key: newSpk.key, signature: newSpk.signature, key_id: newSpk.key_id }
+        updates.identity_signing_key = keys.identitySigningKey
+      }
+      if (Object.keys(updates).length > 0 && !cancelled) {
+        await api.updateKeys(updates, token)
         if (cancelled) return
-        const updates: Parameters<typeof api.updateKeys>[0] = {}
-        let newPrekeys: import('../crypto/keys').OneTimePrekeyEntry[] = []
-        if (st.unconsumed_prekeys < REPLENISH_THRESHOLD) {
-          newPrekeys = generateOneTimePrekeys(REPLENISH_COUNT, st.next_one_time_key_id)
-          updates.one_time_prekeys = newPrekeys.map((o) => ({ key: o.pub, key_id: o.key_id }))
-        }
-        let newSpk: { key: string; signature: string; secret: string; key_id: number } | undefined
-        const spkUpdated = new Date(st.signed_prekey_updated_at).getTime()
-        if (keys.identitySigningSecret && keys.identitySigningKey && Date.now() - spkUpdated > SIGNED_PREKEY_MAX_AGE_MS) {
-          const nextId = (keys.signedPrekey.key_id ?? 1) + 1
-          newSpk = generateSignedPrekey(keys.identitySigningSecret, nextId)
-          updates.signed_prekey = { key: newSpk.key, signature: newSpk.signature, key_id: newSpk.key_id }
-          updates.identity_signing_key = keys.identitySigningKey
-        }
-        if (Object.keys(updates).length > 0) {
-          await api.updateKeys(updates, token)
-          if (newPrekeys.length) await addOtpks?.(newPrekeys)
-          if (newSpk) await rotateSignedPrekey?.(newSpk)
-        }
-      })
-      .catch(() => {})
+        if (newPrekeys.length) await addOtpks?.(newPrekeys)
+        if (newSpk) await rotateSignedPrekey?.(newSpk)
+      }
+    })()
+    keysRefreshLockRef.current = ourRefresh
+    ourRefresh.catch(() => {}).finally(() => {
+      if (keysRefreshLockRef.current === ourRefresh) keysRefreshLockRef.current = Promise.resolve()
+    })
     return () => { cancelled = true }
   }, [keys, token, addOtpks, rotateSignedPrekey])
 
@@ -764,6 +835,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
     try {
       await api.roomsInvite(currentRoom.id, { username: inviteUsername.trim() }, token)
       setInviteUsername('')
+      await deleteSenderKey(currentRoom.id, user.user_id, user.device_id)
       fetchRoomMembers()
     } catch (err) {
       logError('RoomInvite', err)
@@ -793,6 +865,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
     setRoomActionLoading('remove')
     try {
       await api.roomsRemoveMember(currentRoom.id, { username: targetUsername }, token)
+      await deleteSenderKey(currentRoom.id, user.user_id, user.device_id)
       fetchRoomMembers()
     } catch (err) {
       logError('RoomRemove', err)
@@ -925,6 +998,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
       if (payload.trustedKeys && Object.keys(payload.trustedKeys).length > 0) {
         await restoreTrustedKeysFromBackup(payload.trustedKeys)
       }
+      sessionStorage.setItem('backup_restored', '1')
       window.location.reload()
     } catch (err) {
       setBackupError(err instanceof Error ? err.message : 'Ошибка восстановления')
@@ -959,26 +1033,37 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
     return signalEncrypt(plaintext, bundle, ourKeys, addr, deviceId).catch(() => encrypt(plaintext, bundle))
   }
 
-  /** Encrypt DM for recipient (all devices) + self. Returns ciphertexts map. */
+  const lastKnownDevicesRef = useRef<Record<string, string[]>>({})
+  /** Encrypt DM for recipient (all devices) + self. Returns ciphertexts map and revokedCount if any device was revoked. */
   const encryptDMForRecipient = useCallback(
-    async (payload: string, recipientAddr: string): Promise<Record<string, string>> => {
-      if (!keys) return {}
+    async (payload: string, recipientAddr: string): Promise<{ ciphertexts: Record<string, string>; revokedCount?: number }> => {
+      if (!keys) return { ciphertexts: {} }
       const selfBundle = {
         identity_key: keys.identityKey,
         signed_prekey: { key: keys.signedPrekey.key, signature: keys.signedPrekey.signature, key_id: keys.signedPrekey.key_id ?? 1 },
       }
       const ciphertexts: Record<string, string> = {}
       const selfKey = `${user.user_id}:${user.device_id}`
+      let revokedCount = 0
       try {
         const { devices } = await api.getRecipientDevices(recipientAddr, token)
+        const currentIds = (devices ?? []).map((d) => d.device_id)
+        const prevIds = lastKnownDevicesRef.current[recipientAddr]
+        if (prevIds?.length && currentIds.length < prevIds.length && currentIds.every((id) => prevIds.includes(id))) {
+          revokedCount += prevIds.length - currentIds.length
+        }
+        lastKnownDevicesRef.current[recipientAddr] = currentIds
         if (devices?.length) {
           for (const d of devices) {
             try {
               const bundle = await api.getKeys(recipientAddr, token, d.device_id)
               const ct = await encryptDM(payload, bundle, keys, recipientAddr, uuidToSignalDeviceId(d.device_id))
               ciphertexts[`${recipientAddr}:${d.device_id}`] = ct
-            } catch {
-              // skip device without keys
+            } catch (e) {
+              if (e instanceof ApiError && e.status === 404) {
+                await deleteSessionForRecipientDevice(recipientAddr, d.device_id)
+                revokedCount++
+              }
             }
           }
         }
@@ -994,27 +1079,59 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
       }
       const ctSelf = await encryptDM(payload, selfBundle, keys, user.user_id, uuidToSignalDeviceId(user.device_id))
       ciphertexts[selfKey] = ctSelf
-      return ciphertexts
+      return { ciphertexts, revokedCount: revokedCount > 0 ? revokedCount : undefined }
     },
     [keys, token, user.user_id, user.device_id, e2eeMode]
   )
 
-  const encryptForRoom = async (roomAddr: string, payload: string): Promise<Record<string, string> | null> => {
-    if (!keys) return null
-    const roomId = roomAddr.startsWith('!') ? roomAddr.slice(1).split(':')[0] : ''
-    if (!roomId) return null
-    const { members } = await api.roomsMembers(roomId, token).catch(() => ({ members: [] }))
-    const ciphertexts: Record<string, string> = {}
-    for (const m of members || []) {
-      try {
-        const bundle = await api.getKeys(m.address, token)
-        ciphertexts[m.address] = encrypt(payload, bundle)
-      } catch {
-        // skip member without keys
+  const encryptForRoom = useCallback(
+    async (roomAddr: string, payload: string): Promise<Record<string, string> | null> => {
+      if (!keys) return null
+      const roomId = roomAddr.startsWith('!') ? roomAddr.slice(1).split(':')[0] : ''
+      if (!roomId) return null
+      const { members } = await api.roomsMembers(roomId, token).catch(() => ({ members: [] }))
+      const memberList = members ?? []
+      if (memberList.length === 0) return null
+
+      const senderId = user.user_id
+      const senderDeviceId = user.device_id
+      const currentAddrs = memberList.map((m) => m.address)
+      let sk = await getSenderKey(roomId, senderId, senderDeviceId)
+
+      // Rekey when group composition changed (add/remove member)
+      if (sk && !memberSetEquals(sk.memberAddrs, currentAddrs)) {
+        await deleteSenderKey(roomId, senderId, senderDeviceId)
+        sk = null
       }
-    }
-    return Object.keys(ciphertexts).length > 0 ? ciphertexts : null
-  }
+
+      if (!sk) {
+        // First message or after rekey: create sender key, distribute via Signal DM
+        const key = generateSenderKey()
+        const keyId = `sk-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+        await storeSenderKey(roomId, senderId, senderDeviceId, key, keyId, currentAddrs)
+        const distPayload = buildDistributionPayload(roomId, senderId, senderDeviceId, keyId, key, payload)
+        const ciphertexts: Record<string, string> = {}
+        for (const m of memberList) {
+          try {
+            const { ciphertexts: ctMap } = await encryptDMForRecipient(distPayload, m.address)
+            Object.assign(ciphertexts, ctMap)
+          } catch {
+            // skip member without keys
+          }
+        }
+        return Object.keys(ciphertexts).length > 0 ? ciphertexts : null
+      }
+
+      // Subsequent messages: encrypt once with sender key, same ct for all
+      const sk1 = encryptWithSenderKey(payload, sk.key)
+      const ciphertexts: Record<string, string> = {}
+      for (const m of memberList) {
+        ciphertexts[m.address] = sk1
+      }
+      return ciphertexts
+    },
+    [keys, token, user.user_id, user.device_id, encryptDMForRecipient]
+  )
 
   const sendFile = async (file: File) => {
     if (!recipient) return
@@ -1025,8 +1142,13 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
       return
     }
     if (keys && !isRoomAddr(r) && e2eeMode === 'strict') {
-      const trust = await getTrustState(r)
-      if (trust?.status === 'unverified') {
+      let deviceIds: string[] = []
+      try {
+        const { devices } = await api.getRecipientDevices(r, token)
+        deviceIds = (devices ?? []).map((d) => d.device_id)
+      } catch { /* fallback to legacy */ }
+      const hasVerified = await getRecipientHasVerifiedDevice(r, deviceIds)
+      if (!hasVerified) {
         setSendHint('Strict: подтвердите Safety Number перед отправкой')
         setSendHintError(true)
         return
@@ -1034,16 +1156,20 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
     }
     setSendHint(null)
     setSendHintError(false)
+    if (file.size > MAX_ATTACHMENT_SIZE) {
+      setSendHint(`Файл слишком большой (макс. ${MAX_ATTACHMENT_SIZE / 1024 / 1024} МБ)`)
+      setSendHintError(true)
+      return
+    }
     try {
-      const fileBytes = new Uint8Array(await file.arrayBuffer())
-      const { ciphertext, fileKey, nonce, sha256, chunkSize } = await encryptAttachment(fileBytes)
+      const { ciphertext, fileKey, nonce, sha256, chunkSize } = await encryptAttachmentFromFile(file)
       const cipherBlob = new Blob([ciphertext as BlobPart])
       const { content_uri } = await api.uploadFile(cipherBlob, token)
       const payload = JSON.stringify({
         message_type: 'file',
         e2ee_version: E2EE_ATTACHMENT_VERSION,
         content_uri,
-        filename: file.name,
+        filename: sanitizeFilename(file.name),
         size: file.size,
         file_key: fileKey,
         nonce,
@@ -1057,8 +1183,12 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
         content = ciphertexts ? { ciphertexts, session_id: 'sess_mvp' } : { ciphertext: btoa(unescape(encodeURIComponent(payload))), session_id: 'sess_mvp' }
       } else if (keys && !isRoom) {
         try {
-          const ciphertexts = await encryptDMForRecipient(payload, r)
-          content = { ciphertexts, session_id: 'sess_mvp' }
+          const { ciphertexts: ctMap, revokedCount } = await encryptDMForRecipient(payload, r)
+          content = { ciphertexts: ctMap, session_id: 'sess_mvp' }
+          if (revokedCount && revokedCount > 0 && e2eeMode === 'strict') {
+            setSendHint('У получателя отозвано устройство. Сообщение доставлено на оставшиеся.')
+            setSendHintError(false)
+          }
         } catch (e) {
           if (e instanceof ApiError && e.status === 404) {
             setSendHint('Пользователь не найден')
@@ -1128,8 +1258,13 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
       return
     }
     if (keys && !isRoomAddr(r) && e2eeMode === 'strict') {
-      const trust = await getTrustState(r)
-      if (trust?.status === 'unverified') {
+      let deviceIds: string[] = []
+      try {
+        const { devices } = await api.getRecipientDevices(r, token)
+        deviceIds = (devices ?? []).map((d) => d.device_id)
+      } catch { /* fallback to legacy */ }
+      const hasVerified = await getRecipientHasVerifiedDevice(r, deviceIds)
+      if (!hasVerified) {
         setSendHint('Strict: подтвердите Safety Number перед отправкой')
         setSendHintError(true)
         return
@@ -1147,8 +1282,12 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
         content = ciphertexts ? { ciphertexts, session_id: 'sess_mvp' } : { ciphertext: btoa(unescape(encodeURIComponent(plaintext))), session_id: 'sess_mvp' }
       } else if (keys && !isRoom) {
         try {
-          const ciphertexts = await encryptDMForRecipient(plaintext, r)
-          content = { ciphertexts, session_id: 'sess_mvp' }
+          const { ciphertexts: ctMap, revokedCount } = await encryptDMForRecipient(plaintext, r)
+          content = { ciphertexts: ctMap, session_id: 'sess_mvp' }
+          if (revokedCount && revokedCount > 0 && e2eeMode === 'strict') {
+            setSendHint('У получателя отозвано устройство. Сообщение доставлено на оставшиеся.')
+            setSendHintError(false)
+          }
         } catch (e) {
           if (e instanceof ApiError && e.status === 404) {
             setSendHint('Пользователь не найден')
@@ -1208,14 +1347,16 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
   const parseMessage = (ciphertext: string, eventId?: string): ParsedMessage => {
     if (!ciphertext) return { type: 'text', text: '[encrypted]' }
     let plaintext: string
-    // Signal (sig1:) — асинхронная расшифровка, результат в decryptedSignal
-    if (ciphertext.startsWith('sig1:') && eventId && decryptedSignal[eventId]) {
+    // Signal (sig1:) и Sender Key (sk1:) — асинхронная расшифровка, результат в decryptedSignal
+    if ((ciphertext.startsWith('sig1:') || ciphertext.startsWith('sk1:')) && eventId && decryptedSignal[eventId]) {
       plaintext = decryptedSignal[eventId]
-    } else if (ciphertext.startsWith('sig1:')) {
+    } else if (ciphertext.startsWith('sig1:') || ciphertext.startsWith('sk1:')) {
       return { type: 'text', text: '[decrypting...]' }
     } else if (ciphertext.startsWith('opt:')) {
+      const b64 = ciphertext.slice(4)
+      if (!isValidBase64(b64)) return { type: 'text', text: '[encrypted]' }
       try {
-        plaintext = decodeURIComponent(escape(atob(ciphertext.slice(4))))
+        plaintext = decodeURIComponent(escape(atob(b64)))
       } catch {
         return { type: 'text', text: '[encrypted]' }
       }
@@ -1226,6 +1367,14 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
           decodeBase64ToBytes(keys.identitySecret),
           decodeBase64ToBytes(keys.signedPrekey.secret)
         )
+        const dist = parseDistributionPayload(plaintext)
+        if (dist) {
+          const bin = atob(dist.key)
+          const arr = new Uint8Array(bin.length)
+          for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i)
+          storeSenderKey(dist.roomId, dist.senderId, dist.senderDeviceId, arr, dist.keyId).catch(() => {})
+          plaintext = dist.body ?? '[key received]'
+        }
       } catch {
         return { type: 'text', text: '[decrypt failed]' }
       }
@@ -1241,7 +1390,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
       if (parsed?.message_type === 'file' && parsed?.content_uri) {
         return {
           type: 'file',
-          filename: parsed.filename || 'file',
+          filename: sanitizeFilename(parsed.filename || 'file'),
           content_uri: parsed.content_uri,
           size: parsed.size,
           file_key: parsed.file_key,
@@ -1298,8 +1447,9 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
     }
   }, [token])
 
-  const downloadFileMessage = async (contentUri: string, filename: string, fileKey?: string, nonce?: string, fileSha256?: string, chunkSize?: number) => {
+  const downloadFileMessage = async (contentUri: string, filename: string, fileKey?: string, nonce?: string, fileSha256?: string, chunkSize?: number, e2eeVersion?: number) => {
     try {
+      validateAttachmentVersion(e2eeVersion)
       const res = await api.downloadFile(contentUri, token)
       let blob: Blob = await res.blob()
       if (fileKey && (nonce || chunkSize)) {
@@ -1310,7 +1460,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = filename
+      a.download = sanitizeFilename(filename)
       a.click()
       URL.revokeObjectURL(url)
     } catch (err) {
@@ -1385,6 +1535,22 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
         </div>
       </header>
 
+      {backupRestoredHint && (
+        <div className="chat-backup-restored-hint">
+          <span>Вы восстановили ключи. Рекомендуется повторно проверить Safety Number у важных контактов.</span>
+          <button
+            type="button"
+            onClick={() => {
+              sessionStorage.removeItem('backup_restored')
+              setBackupRestoredHint(false)
+            }}
+            className="chat-vpn-btn chat-btn-sm"
+          >
+            Понятно
+          </button>
+        </div>
+      )}
+
       <main className="chat-main">
         {mainView === 'devices' ? (
           <>
@@ -1410,13 +1576,35 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
                       className={`chat-device-card ${d.is_current ? 'chat-device-card--current' : ''}`}
                     >
                       <div>
-                        <span className="chat-device-id">{d.device_id.slice(0, 8)}…{d.device_id.slice(-4)}</span>
+                        <span className="chat-device-id">{d.name?.trim() || `${d.device_id.slice(0, 8)}…${d.device_id.slice(-4)}`}</span>
+                        {d.name?.trim() && <span className="chat-device-id-suffix"> ({d.device_id.slice(0, 8)}…)</span>}
                         {d.is_current && <span className="chat-device-current-badge">текущее</span>}
                         <p className="chat-device-created">Создано: {d.created_at}</p>
                       </div>
-                      <button
-                        type="button"
-                        className="chat-vpn-btn-danger"
+                      <div className="chat-device-actions">
+                        <button
+                          type="button"
+                          className="chat-vpn-btn"
+                          onClick={async () => {
+                            const newName = window.prompt('Название устройства', d.name?.trim() || '')
+                            if (newName == null) return
+                            setDevicesRenameLoading(d.device_id)
+                            try {
+                              await api.renameDevice(d.device_id, newName.trim(), token)
+                              setDevices((prev) => prev.map((x) => x.device_id === d.device_id ? { ...x, name: newName.trim() } : x))
+                            } catch (err) {
+                              logError('DeviceRename', err)
+                            } finally {
+                              setDevicesRenameLoading(null)
+                            }
+                          }}
+                          disabled={devicesRenameLoading === d.device_id}
+                        >
+                          {devicesRenameLoading === d.device_id ? '…' : 'Переименовать'}
+                        </button>
+                        <button
+                          type="button"
+                          className="chat-vpn-btn-danger"
                         onClick={async () => {
                           if (d.is_current && !window.confirm('Удалить текущее устройство? Вы выйдете из аккаунта.')) return
                           setDevicesRevokeLoading(d.device_id)
@@ -1434,6 +1622,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
                       >
                         {devicesRevokeLoading === d.device_id ? '…' : 'Удалить'}
                       </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1978,7 +2167,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
             {searchFilteredEvents.map((ev) => {
               const isOwn = ev.sender === user.user_id
               const parsed = ev.ciphertext ? parseMessage(ev.ciphertext, ev.event_id) : { type: 'text' as const, text: '[encrypted]' }
-              const encrypted = ev.ciphertext ? (isE2EEPayload(ev.ciphertext) || isSignalCiphertext(ev.ciphertext)) : false
+              const encrypted = ev.ciphertext ? (isE2EEPayload(ev.ciphertext) || isSignalCiphertext(ev.ciphertext) || ev.ciphertext.startsWith('sk1:')) : false
               // Наши сообщения из sync зашифрованы для получателя — не показываем [decrypt failed]
               const displayText = isOwn && parsed.type === 'text' && parsed.text === '[decrypt failed]'
                 ? 'Ваше сообщение'
@@ -1993,11 +2182,12 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
                         filename={parsed.filename}
                         size={parsed.size}
                         token={token}
-                        onDownload={() => downloadFileMessage(parsed.content_uri, parsed.filename, parsed.file_key, parsed.nonce, parsed.file_sha256, parsed.chunk_size)}
+                        onDownload={() => downloadFileMessage(parsed.content_uri, parsed.filename, parsed.file_key, parsed.nonce, parsed.file_sha256, parsed.chunk_size, parsed.e2ee_version)}
                         fileKey={parsed.file_key}
                         nonce={parsed.nonce}
                         fileSha256={parsed.file_sha256}
                         chunkSize={parsed.chunk_size}
+                        e2eeVersion={parsed.e2ee_version}
                       />
                     ) : (
                       <span className="chat-msg-text">{displayText}</span>
@@ -2100,6 +2290,22 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
             <pre className="chat-fingerprint-pre">
               {fingerprintModal.safetyNumber}
             </pre>
+            {fingerprintModal.trustHistory && (fingerprintModal.trustHistory.seenAt != null || fingerprintModal.trustHistory.verifiedAt != null || fingerprintModal.trustHistory.changedAt != null) && (
+              <div className="chat-fingerprint-history">
+                <p className="chat-fingerprint-history-title">
+                  {fingerprintModal.trustHistory.status === 'changed' ? 'История предыдущего ключа' : 'История ключа'}
+                </p>
+                {fingerprintModal.trustHistory.seenAt != null && (
+                  <p className="chat-fingerprint-history-item">Впервые увиден: {formatTrustDate(fingerprintModal.trustHistory.seenAt)}</p>
+                )}
+                {fingerprintModal.trustHistory.verifiedAt != null && (
+                  <p className="chat-fingerprint-history-item">Подтверждён: {formatTrustDate(fingerprintModal.trustHistory.verifiedAt)}</p>
+                )}
+                {fingerprintModal.trustHistory.changedAt != null && (
+                  <p className="chat-fingerprint-history-item">Изменён (принят): {formatTrustDate(fingerprintModal.trustHistory.changedAt)}</p>
+                )}
+              </div>
+            )}
             <div className="chat-fingerprint-actions">
               <button
                 type="button"
@@ -2112,13 +2318,27 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
               <button
                 type="button"
                 onClick={async () => {
-                  await markVerified(fingerprintModal.recipient, 'manual')
+                  await markVerified(fingerprintModal.recipient, 'manual', fingerprintModal.identityKey, fingerprintModal.deviceId)
                   close()
                 }}
                 className="chat-vpn-btn"
               >
                 Подтвердить
               </button>
+              {fingerprintModal.trustHistory?.status === 'verified' && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!window.confirm('Снять доверие с этого ключа? В Strict режиме отправка будет заблокирована до повторного подтверждения.')) return
+                    await clearVerified(fingerprintModal.recipient, fingerprintModal.deviceId)
+                    close()
+                  }}
+                  className="chat-vpn-btn chat-vpn-btn-danger"
+                  title="Снять доверие / сбросить"
+                >
+                  Не доверять
+                </button>
+              )}
               <button
                 type="button"
                 onClick={close}

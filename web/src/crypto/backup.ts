@@ -1,10 +1,12 @@
 /**
  * E2EE backup: encrypt keys with KDF(password, server_salt).
+ * AEAD (secretbox = XSalsa20-Poly1305) + explicit integrity hash.
  * Decryption requires server to provide salt.
  *
  * Schema versions:
  * - v1: identityKey, identitySecret, signedPrekey, oneTimePrekeys: string[] (pub only)
  * - v2: full Strict — identitySigningSecret, oneTimePrekeys as {key_id,pub,priv}, trustedKeys, registrationId, device_id
+ * - v2+integrity: payload.integrity = SHA256(JSON) for explicit verification
  */
 import * as nacl from 'tweetnacl'
 import { decodeBase64, encodeBase64, decodeUTF8, encodeUTF8 } from 'tweetnacl-util'
@@ -32,6 +34,8 @@ export interface BackupPayload {
   device_id?: string
   trustedKeys?: Record<string, TrustEntry>
   schemaVersion?: number
+  /** SHA256 of payload (without this field) — integrity verification */
+  integrity?: string
 }
 
 /** Legacy v1 payload (oneTimePrekeys = string[]). */
@@ -42,6 +46,14 @@ interface BackupPayloadV1 {
   identitySigningSecret?: string
   signedPrekey: { key: string; signature: string; secret: string; key_id?: number }
   oneTimePrekeys?: string[]
+}
+
+async function sha256Base64(data: Uint8Array): Promise<string> {
+  const hash = await crypto.subtle.digest('SHA-256', data as BufferSource)
+  const arr = new Uint8Array(hash)
+  let bin = ''
+  for (let i = 0; i < arr.length; i++) bin += String.fromCharCode(arr[i]!)
+  return btoa(bin)
 }
 
 async function deriveKey(password: string, salt: Uint8Array): Promise<Uint8Array> {
@@ -114,10 +126,14 @@ export async function createBackup(
   saltB64: string
 ): Promise<string> {
   const full = payload.schemaVersion === 2 ? payload : toFullPayload(payload)
+  const { integrity: _drop, ...payloadNoIntegrity } = full
+  const plainNoIntegrity = JSON.stringify(payloadNoIntegrity)
+  const integrity = await sha256Base64(new TextEncoder().encode(plainNoIntegrity))
+  const fullWithIntegrity = { ...full, integrity }
+  const plain = JSON.stringify(fullWithIntegrity)
   const salt = decodeBase64(saltB64)
   const key = await deriveKey(password, salt)
   const nonce = nacl.randomBytes(NONCE_LENGTH)
-  const plain = JSON.stringify(full)
   const ciphertext = nacl.secretbox(decodeUTF8(plain), nonce, key)
   const blob = new Uint8Array(1 + NONCE_LENGTH + ciphertext.length)
   blob[0] = VERSION_FULL
@@ -145,5 +161,14 @@ export async function restoreBackup(
     throw new Error('Wrong password or corrupted backup')
   }
   const parsed = JSON.parse(encodeUTF8(plain)) as BackupPayload | BackupPayloadV1
+  const storedIntegrity = (parsed as BackupPayload).integrity
+  if (typeof storedIntegrity === 'string') {
+    const { integrity: _d, ...rest } = parsed as BackupPayload
+    const plainNoIntegrity = JSON.stringify(rest)
+    const computed = await sha256Base64(new TextEncoder().encode(plainNoIntegrity))
+    if (computed !== storedIntegrity) {
+      throw new Error('Backup integrity check failed (tampered or corrupted)')
+    }
+  }
   return toFullPayload(parsed)
 }

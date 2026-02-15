@@ -280,16 +280,17 @@ func (h *relayHandler) send(w http.ResponseWriter, r *http.Request) {
 	ciphertext, _ := base64.StdEncoding.DecodeString(req.Content.Ciphertext)
 	idempotencyKey := r.Header.Get("X-Idempotency-Key")
 
-	// Capability pinning: when E2EE_STRICT_ONLY, reject non-Signal messages
+	// Capability pinning: when E2EE_STRICT_ONLY, reject non-Signal/sender-key messages
 	if h.e2eeStrictOnly {
+		allowed := func(ct string) bool { return strings.HasPrefix(ct, signalPrefix) || strings.HasPrefix(ct, "sk1:") }
 		if len(req.Content.Ciphertexts) > 0 {
 			for _, ct := range req.Content.Ciphertexts {
-				if ct != "" && !strings.HasPrefix(ct, signalPrefix) {
+				if ct != "" && !allowed(ct) {
 					writeError(w, http.StatusBadRequest, "strict_signal_only", "Server requires Signal Protocol only (no MVP/plain)")
 					return
 				}
 			}
-		} else if len(ciphertext) > 0 && !strings.HasPrefix(string(ciphertext), signalPrefix) {
+		} else if len(ciphertext) > 0 && !allowed(string(ciphertext)) {
 			writeError(w, http.StatusBadRequest, "strict_signal_only", "Server requires Signal Protocol only (no MVP/plain)")
 			return
 		}

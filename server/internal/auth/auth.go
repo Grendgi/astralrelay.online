@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -527,6 +528,7 @@ func (s *Service) GetKeyBackup(ctx context.Context, userID int64) (salt []byte, 
 // DeviceInfo describes a user device for the devices list.
 type DeviceInfo struct {
 	DeviceID  string
+	Name      string
 	CreatedAt time.Time
 	IsCurrent bool
 }
@@ -534,7 +536,7 @@ type DeviceInfo struct {
 // ListDevices returns devices for the user.
 func (s *Service) ListDevices(ctx context.Context, userID int64, currentDeviceID uuid.UUID) ([]DeviceInfo, error) {
 	rows, err := s.db.Pool.Query(ctx,
-		`SELECT id, created_at FROM devices WHERE user_id = $1 ORDER BY created_at DESC`,
+		`SELECT id, COALESCE(name, ''), created_at FROM devices WHERE user_id = $1 ORDER BY created_at DESC`,
 		userID,
 	)
 	if err != nil {
@@ -544,12 +546,14 @@ func (s *Service) ListDevices(ctx context.Context, userID int64, currentDeviceID
 	var out []DeviceInfo
 	for rows.Next() {
 		var id uuid.UUID
+		var name string
 		var createdAt time.Time
-		if err := rows.Scan(&id, &createdAt); err != nil {
+		if err := rows.Scan(&id, &name, &createdAt); err != nil {
 			return nil, err
 		}
 		out = append(out, DeviceInfo{
 			DeviceID:  id.String(),
+			Name:      name,
 			CreatedAt: createdAt,
 			IsCurrent: id == currentDeviceID,
 		})
@@ -557,7 +561,34 @@ func (s *Service) ListDevices(ctx context.Context, userID int64, currentDeviceID
 	return out, rows.Err()
 }
 
+// RenameDevice sets the display name for a device. Only the owner can rename.
+func (s *Service) RenameDevice(ctx context.Context, userID int64, deviceID uuid.UUID, name string) error {
+	name = sanitizeDeviceName(name)
+	_, err := s.db.Pool.Exec(ctx,
+		`UPDATE devices SET name = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3`,
+		name, deviceID, userID,
+	)
+	return err
+}
+
+func sanitizeDeviceName(s string) string {
+	const maxLen = 64
+	s = strings.TrimSpace(s)
+	var buf strings.Builder
+	for _, r := range s {
+		if r == '\t' || r == '\n' || r == '\r' || r < 32 {
+			continue
+		}
+		if buf.Len() >= maxLen {
+			break
+		}
+		buf.WriteRune(r)
+	}
+	return buf.String()
+}
+
 // RevokeDevice revokes all tokens for the device and deletes it. The device will need to re-login.
+// Deleted devices are no longer returned by keydir.GetBundle/GetBundleForUser/ListDevicesForUser.
 func (s *Service) RevokeDevice(ctx context.Context, userID int64, deviceID uuid.UUID) error {
 	tag, err := s.db.Pool.Exec(ctx,
 		`UPDATE access_tokens SET revoked_at = NOW() WHERE user_id = $1 AND device_id = $2 AND revoked_at IS NULL`,

@@ -9,7 +9,10 @@ export {
   checkIdentityKeyChange,
   initTrustedKeysStorage,
   markVerified,
+  clearVerified,
+  removeTrustEntry,
   getTrustState,
+  getRecipientHasVerifiedDevice,
   getTrustedKeysForBackup,
   restoreTrustedKeysFromBackup,
 } from './trusted-keys-storage'

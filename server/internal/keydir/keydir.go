@@ -49,6 +49,7 @@ func New(database *db.DB, domain string, enc *dbenc.Cipher) *Service {
 
 // GetBundle returns prekey bundle for user@domain/device_id.
 // If user is on remote domain, caller (federation) should fetch via S2S.
+// Revoked devices are deleted (auth.RevokeDevice), so ErrNotFound for revoked device_id.
 func (s *Service) GetBundle(ctx context.Context, userID, deviceID string) (*Bundle, error) {
 	var username, domain string
 	_, err := fmt.Sscanf(userID, "@%[^:]:%s", &username, &domain)
@@ -121,6 +122,7 @@ func (s *Service) GetBundle(ctx context.Context, userID, deviceID string) (*Bund
 }
 
 // ListDevicesForUser returns device IDs for a user (same domain). Used for multi-device delivery.
+// Revoked devices are deleted from devices table, so they are not listed.
 func (s *Service) ListDevicesForUser(ctx context.Context, userID string) ([]string, error) {
 	userID = strings.TrimSpace(userID)
 	username := strings.TrimPrefix(userID, "@")
@@ -155,6 +157,7 @@ func (s *Service) ListDevicesForUser(ctx context.Context, userID string) ([]stri
 
 // GetBundleForUser returns prekey bundle for the first device of a user.
 // Used for MVP 1:1 when recipient's device_id is unknown.
+// Revoked devices are deleted, so only active devices are returned.
 // Username is unique, domain is ignored — accepts @user:domain or plain username.
 func (s *Service) GetBundleForUser(ctx context.Context, userID string) (*Bundle, string, error) {
 	userID = strings.TrimSpace(userID)

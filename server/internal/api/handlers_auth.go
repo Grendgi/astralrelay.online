@@ -216,12 +216,13 @@ func (h *authHandler) listDevices(w http.ResponseWriter, r *http.Request) {
 	}
 	type dev struct {
 		DeviceID  string `json:"device_id"`
+		Name      string `json:"name,omitempty"`
 		CreatedAt string `json:"created_at"`
 		IsCurrent bool   `json:"is_current"`
 	}
 	out := make([]dev, len(devices))
 	for i, d := range devices {
-		out[i] = dev{DeviceID: d.DeviceID, CreatedAt: d.CreatedAt.Format("2006-01-02 15:04"), IsCurrent: d.IsCurrent}
+		out[i] = dev{DeviceID: d.DeviceID, Name: d.Name, CreatedAt: d.CreatedAt.Format("2006-01-02 15:04"), IsCurrent: d.IsCurrent}
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"devices": out})
 }
@@ -243,6 +244,33 @@ func (h *authHandler) revokeDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logjson.Log("audit", map[string]interface{}{"action": "device_revoke", "user_id": userID, "device_id": deviceID.String()})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok"})
+}
+
+func (h *authHandler) renameDevice(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r.Context())
+	deviceIDStr := chi.URLParam(r, "deviceID")
+	if userID == 0 || deviceIDStr == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "deviceID required")
+		return
+	}
+	deviceID, err := uuid.Parse(deviceIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid device_id")
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON")
+		return
+	}
+	if err := h.auth.RenameDevice(r.Context(), userID, deviceID, req.Name); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	logjson.Log("audit", map[string]interface{}{"action": "device_rename", "user_id": userID, "device_id": deviceID.String()})
 	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok"})
 }
 

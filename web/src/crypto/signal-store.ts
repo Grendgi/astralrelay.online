@@ -9,6 +9,7 @@ type StoreValue = KeyPair | ArrayBuffer | string | number | undefined
 const DB_NAME = 'signal-keystore'
 const DB_VERSION = 1
 const STORE_NAME = 'kv'
+const SESSION_KEY_PREFIX = 'session'
 
 /** Helper to serialize values for IndexedDB (handles ArrayBuffer in objects). */
 function serialize(v: StoreValue): unknown {
@@ -258,4 +259,11 @@ export class IndexedDBSignalStore {
     const kp = await this.getIdentityKeyPair()
     return kp?.pubKey
   }
+}
+
+/** Delete Signal session for a recipient device (after revoke). Identifier format: name.deviceId (matches libsignal). */
+export async function deleteSessionByIdentifier(identifier: string): Promise<void> {
+  const db = await openDB()
+  await removeFromDB(db, SESSION_KEY_PREFIX + identifier)
+  db.close()
 }

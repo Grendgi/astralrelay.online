@@ -117,16 +117,36 @@ func (s *Service) Upload(ctx context.Context, r io.Reader, size int64) (contentU
 	return contentURI, nil
 }
 
-func (s *Service) Download(ctx context.Context, contentURI string) (io.ReadCloser, error) {
+func (s *Service) Download(ctx context.Context, contentURI string, rangeOffset, rangeLength int64) (io.ReadCloser, *DownloadInfo, error) {
 	key, err := objectKey(contentURI)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	obj, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
+	opts := minio.GetObjectOptions{}
+	if rangeOffset > 0 || rangeLength > 0 {
+		opts.SetRange(rangeOffset, rangeLength)
+	}
+
+	obj, err := s.client.GetObject(ctx, s.bucket, key, opts)
 	if err != nil {
-		return nil, fmt.Errorf("download: %w", err)
+		return nil, nil, fmt.Errorf("download: %w", err)
 	}
 
-	return obj, nil
+	info := &DownloadInfo{IsRange: rangeOffset > 0 || rangeLength > 0, RangeOffset: rangeOffset, RangeLength: rangeLength}
+	if info.IsRange {
+		stat, err := s.client.StatObject(ctx, s.bucket, key, minio.StatObjectOptions{})
+		if err == nil {
+			info.TotalSize = stat.Size
+		}
+	}
+
+	return obj, info, nil
+}
+
+type DownloadInfo struct {
+	IsRange     bool
+	RangeOffset int64
+	RangeLength int64
+	TotalSize   int64
 }

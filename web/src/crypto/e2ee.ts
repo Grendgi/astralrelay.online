@@ -5,8 +5,10 @@
  */
 import * as nacl from 'tweetnacl'
 
-/** E2EE attachment envelope version: 1=file_key+nonce, 2=+file_sha256 */
+/** Supported attachment versions: 1=file_key+nonce, 2=+file_sha256, 3=+chunk_size */
 export const E2EE_ATTACHMENT_VERSION = 2
+export const E2EE_ATTACHMENT_VERSION_MIN = 1
+export const E2EE_ATTACHMENT_VERSION_MAX = 3
 import { decodeBase64, encodeBase64, decodeUTF8, encodeUTF8 } from 'tweetnacl-util'
 
 export interface PrekeyBundle {
@@ -93,6 +95,9 @@ export async function sha256Base64(data: Uint8Array): Promise<string> {
 /** Default chunk size for large files (1MB). Files larger use chunked encryption. */
 export const DEFAULT_CHUNK_SIZE = 1024 * 1024
 
+/** Max attachment size (50MB) — prevents OOM. */
+export const MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024
+
 /** Build deterministic nonce for chunk index (unique per key+chunk). */
 function chunkNonce(chunkIndex: number): Uint8Array {
   const nonce = new Uint8Array(nacl.secretbox.nonceLength)
@@ -133,6 +138,73 @@ export async function encryptAttachment(
   const ciphertext = new Uint8Array(chunks.reduce((s, c) => s + c.length, 0))
   let offset = 0
   for (const c of chunks) {
+    ciphertext.set(c, offset)
+    offset += c.length
+  }
+  const sha256 = await sha256Base64(ciphertext)
+  return { ciphertext, fileKey: encodeBase64(key), nonce: '', sha256, chunkSize }
+}
+
+/** Encrypt file from stream — never loads full plaintext into RAM. Use for large files. */
+export async function encryptAttachmentFromFile(
+  file: File,
+  options?: { chunkSize?: number }
+): Promise<{
+  ciphertext: Uint8Array
+  fileKey: string
+  nonce: string
+  sha256: string
+  chunkSize?: number
+}> {
+  const chunkSize = options?.chunkSize ?? DEFAULT_CHUNK_SIZE
+  if (file.size > MAX_ATTACHMENT_SIZE) {
+    throw new Error(`Файл слишком большой (макс. ${MAX_ATTACHMENT_SIZE / 1024 / 1024} МБ)`)
+  }
+  const key = nacl.randomBytes(nacl.secretbox.keyLength)
+
+  if (file.size <= chunkSize) {
+    const buf = await file.arrayBuffer()
+    const plaintext = new Uint8Array(buf)
+    const nonce = nacl.randomBytes(nacl.secretbox.nonceLength)
+    const ciphertext = nacl.secretbox(plaintext, nonce, key)
+    const sha256 = await sha256Base64(ciphertext)
+    return { ciphertext, fileKey: encodeBase64(key), nonce: encodeBase64(nonce), sha256 }
+  }
+
+  const reader = file.stream().getReader()
+  const cipherChunks: Uint8Array[] = []
+  let buffer = new Uint8Array(0)
+  let idx = 0
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    const newBuf = new Uint8Array(buffer.length + (value?.length ?? 0))
+    newBuf.set(buffer)
+    if (value) newBuf.set(value, buffer.length)
+    buffer = newBuf
+
+    while (buffer.length >= chunkSize) {
+      const chunk = buffer.subarray(0, chunkSize)
+      const remaining = buffer.subarray(chunkSize)
+      buffer = new Uint8Array(remaining.length)
+      buffer.set(remaining)
+      const nonce = chunkNonce(idx++)
+      const ct = nacl.secretbox(chunk, nonce, key)
+      cipherChunks.push(ct)
+    }
+  }
+
+  if (buffer.length > 0) {
+    const nonce = chunkNonce(idx)
+    const ct = nacl.secretbox(buffer, nonce, key)
+    cipherChunks.push(ct)
+  }
+
+  const total = cipherChunks.reduce((s, c) => s + c.length, 0)
+  const ciphertext = new Uint8Array(total)
+  let offset = 0
+  for (const c of cipherChunks) {
     ciphertext.set(c, offset)
     offset += c.length
   }
@@ -200,4 +272,19 @@ export function isE2EEPayload(s: string): boolean {
   } catch {
     return false
   }
+}
+
+/** Validate attachment payload version before decrypt. Throws if unsupported. */
+export function validateAttachmentVersion(version?: number): void {
+  if (version == null) return
+  if (typeof version !== 'number' || version < E2EE_ATTACHMENT_VERSION_MIN || version > E2EE_ATTACHMENT_VERSION_MAX) {
+    throw new Error(`Unsupported attachment version: ${version}`)
+  }
+}
+
+/** Check if string is valid base64 (A-Za-z0-9+/=, length % 4 === 0). */
+export function isValidBase64(s: string): boolean {
+  if (typeof s !== 'string' || s.length === 0) return false
+  const re = /^[A-Za-z0-9+/]*={0,2}$/
+  return re.test(s) && s.length % 4 === 0
 }

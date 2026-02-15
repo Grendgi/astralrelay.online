@@ -292,13 +292,17 @@ func (s *Service) Sync(ctx context.Context, recipientUserID int64, deviceID uuid
 			var ciphertexts map[string]string
 			if json.Unmarshal(ciphertextsRaw, &ciphertexts) == nil {
 				deviceKey := recipientAddr + ":" + deviceID.String()
-				if ct, ok := ciphertexts[deviceKey]; ok && ct != "" {
+				var ct string
+				var ok bool
+				if ct, ok = ciphertexts[deviceKey]; ok && ct != "" {
+				} else if ct, ok = ciphertexts[recipientAddr]; ok && ct != "" {
+				}
+				if ct != "" {
 					if dec, err := base64.StdEncoding.DecodeString(ct); err == nil {
 						e.Ciphertext = dec
-					}
-				} else if ct, ok := ciphertexts[recipientAddr]; ok && ct != "" {
-					if dec, err := base64.StdEncoding.DecodeString(ct); err == nil {
-						e.Ciphertext = dec
+					} else if strings.HasPrefix(ct, "sig1:") || strings.HasPrefix(ct, "sk1:") {
+						// Signal/sender-key: pass through raw (client sends prefix+base64, not double-encoded)
+						e.Ciphertext = []byte(ct)
 					}
 				}
 			}

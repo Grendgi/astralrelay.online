@@ -3,8 +3,13 @@
  * Uses dynamic import — falls back to MVP e2ee if the package is unavailable.
  *
  * Format: ciphertext prefixed with "sig1:" = Signal protocol; else = MVP.
+ * Version: sig1 = format v1 (prefix + base64 ciphertext). Validate base64 before decrypt.
  */
 import type { PrekeyBundle } from './e2ee'
+import { isValidBase64 } from './e2ee'
+
+/** Signal format version: prefix "sig1:" + base64 ciphertext */
+export const SIGNAL_FORMAT_VERSION = 1
 
 const SIGNAL_PREFIX = 'sig1:'
 
@@ -181,6 +186,8 @@ export async function signalDecrypt(
   senderDeviceId?: number | string
 ): Promise<string> {
   if (!ciphertext.startsWith(SIGNAL_PREFIX)) throw new Error('Not Signal format')
+  const raw = ciphertext.slice(SIGNAL_PREFIX.length)
+  if (!isValidBase64(raw)) throw new Error('Invalid Signal payload: not base64')
 
   const lib = await import('@privacyresearch/libsignal-protocol-typescript')
   const base = new IndexedDBSignalStore()
@@ -196,7 +203,6 @@ export async function signalDecrypt(
   const address = new lib.SignalProtocolAddress(senderAddr, sigDeviceId)
   const sessionCipher = new lib.SessionCipher(store, address)
 
-  const raw = ciphertext.slice(SIGNAL_PREFIX.length)
   try {
     const plain = await sessionCipher.decryptPreKeyWhisperMessage(raw, 'binary')
     return new TextDecoder().decode(plain)
@@ -212,4 +218,15 @@ export async function signalDecrypt(
 
 export function isSignalCiphertext(s: string): boolean {
   return s.startsWith(SIGNAL_PREFIX)
+}
+
+/** Delete Signal session for recipient device (after revoke). Call when getKeys returns 404 for that device. */
+export async function deleteSessionForRecipientDevice(
+  recipientAddr: string,
+  deviceId: number | string
+): Promise<void> {
+  const sigDeviceId = typeof deviceId === 'string' ? uuidToSignalDeviceId(deviceId) : deviceId
+  const identifier = `${recipientAddr}.${sigDeviceId}`
+  const { deleteSessionByIdentifier } = await import('./signal-store')
+  await deleteSessionByIdentifier(identifier)
 }

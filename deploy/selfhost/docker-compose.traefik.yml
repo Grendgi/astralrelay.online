@@ -27,7 +27,7 @@ services:
       - "traefik.docker.network=selfhost_default"
       - "traefik.http.middlewares.secure-headers.headers.contenttypenosniff=true"
       - "traefik.http.middlewares.secure-headers.headers.framedeny=true"
-      - "traefik.http.middlewares.secure-headers.headers.contentsecuritypolicy=default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ws: wss:; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'self';"
+      - "traefik.http.middlewares.secure-headers.headers.contentsecuritypolicy=default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ws: wss:; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'self'; require-trusted-types-for 'script'; trusted-types default;"
       - "traefik.http.middlewares.hsts.headers.stsseconds=31536000"
       - "traefik.http.middlewares.hsts.headers.stsincludesubdomains=true"
       - "traefik.http.middlewares.hsts.headers.stspreload=true"

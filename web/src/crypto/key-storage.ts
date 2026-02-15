@@ -194,18 +194,24 @@ export async function clearKeysFromStorage(): Promise<void> {
   }
 }
 
-/** Update signed prekey (after rotation). */
+/** Update signed prekey (after rotation). Writes only when something changed. */
 export async function updateSignedPrekeyInStorage(
   signedPrekey: { key: string; signature: string; secret: string; key_id: number }
 ): Promise<void> {
   const keys = await getKeysFromStorage()
   if (!keys) return
-  const current = keys.signedPrekey
-  if (current.key_id === signedPrekey.key_id && current.key === signedPrekey.key) return
+  const curr = keys.signedPrekey
+  if (
+    curr.key_id === signedPrekey.key_id &&
+    curr.key === signedPrekey.key &&
+    curr.signature === signedPrekey.signature &&
+    curr.secret === signedPrekey.secret
+  )
+    return
   await putRawToStorage({ ...keys, signedPrekey })
 }
 
-/** Merge new one-time prekeys (from replenishment) into stored keys. */
+/** Merge new one-time prekeys (from replenishment) into stored keys. Writes only when there are new keys. */
 export async function mergeOtpksToStorage(entries: Array<{ key_id: number; pub: string; priv: string }>): Promise<void> {
   if (!entries?.length) return
   const keys = await getKeysFromStorage()
@@ -219,7 +225,7 @@ export async function mergeOtpksToStorage(entries: Array<{ key_id: number; pub: 
   })
 }
 
-/** Remove one-time prekey when consumed by Signal protocol. */
+/** Remove one-time prekey when consumed by Signal protocol. Writes only when key was actually removed. */
 export async function removeOtpkFromStorage(keyId: number): Promise<void> {
   const keys = await getKeysFromStorage()
   if (!keys || !keys.oneTimePrekeys?.length) return

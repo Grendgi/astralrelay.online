@@ -70,7 +70,14 @@ export const api = {
     }),
 
   listDevices: (token: string) =>
-    request<{ devices: Array<{ device_id: string; created_at: string; is_current: boolean }> }>('/auth/devices', { token }),
+    request<{ devices: Array<{ device_id: string; name?: string; created_at: string; is_current: boolean }> }>('/auth/devices', { token }),
+
+  renameDevice: (deviceId: string, name: string, token: string) =>
+    request<{ status: string }>(`/auth/devices/${encodeURIComponent(deviceId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+      token,
+    }),
 
   revokeDevice: (deviceId: string, token: string) =>
     request<{ status: string }>(`/auth/devices/${encodeURIComponent(deviceId)}/revoke`, {
@@ -155,24 +162,59 @@ export const api = {
   },
 
   downloadFile: async (contentUri: string, token: string): Promise<Response> => {
-    const doFetch = () =>
-      fetch(`${API_BASE}/media/${encodeURIComponent(contentUri)}`, {
-        headers: { 'Authorization': `Bearer ${token}` },
+    const doFetch = (rangeStart?: number) => {
+      const headers: Record<string, string> = { 'Authorization': `Bearer ${token}` }
+      if (rangeStart != null && rangeStart > 0) {
+        headers['Range'] = `bytes=${rangeStart}-`
+      }
+      return fetch(`${API_BASE}/media/${encodeURIComponent(contentUri)}`, {
+        headers,
         credentials: 'include',
       })
-    const maxAttempts = 3
+    }
+    const maxAttempts = 5
+    let received = 0
+    const chunks: Uint8Array[] = []
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        const res = await doFetch()
-        if (res.ok) return res
-        const retryable = [408, 429, 500, 502, 503, 504].includes(res.status)
-        if (!retryable || attempt === maxAttempts) return res
-        try { await res.body?.cancel?.() } catch { /* consume body before retry */ }
-        await new Promise((r) => setTimeout(r, 1000 * attempt))
+        const res = await doFetch(received > 0 ? received : undefined)
+        if (!res.ok && (received === 0 || ![206].includes(res.status))) {
+          const retryable = [408, 429, 500, 502, 503, 504].includes(res.status)
+          if (!retryable || attempt === maxAttempts) return res
+          try { await res.body?.cancel?.() } catch { /* consume */ }
+          await new Promise((r) => setTimeout(r, 1000 * attempt))
+          continue
+        }
+        if (res.ok || res.status === 206) {
+          const reader = res.body?.getReader()
+          if (!reader) return res
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            chunks.push(value)
+            received += value.length
+          }
+          const contentRange = res.headers.get('Content-Range')
+          const totalMatch = contentRange?.match(/\/\s*(\d+)\s*$/)
+          const total = totalMatch ? parseInt(totalMatch[1], 10) : received
+          if (received >= total) {
+            const blob = new Blob(chunks)
+            return new Response(blob, {
+              status: 200,
+              headers: { 'Content-Type': 'application/octet-stream' },
+            })
+          }
+        }
       } catch (e) {
         if (attempt === maxAttempts) throw e
         await new Promise((r) => setTimeout(r, 1000 * attempt))
       }
+    }
+    if (chunks.length > 0) {
+      return new Response(new Blob(chunks), {
+        status: 200,
+        headers: { 'Content-Type': 'application/octet-stream' },
+      })
     }
     throw new ApiError('Download failed', 0, 'download_failed')
   },

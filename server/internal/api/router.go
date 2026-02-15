@@ -103,6 +103,7 @@ func NewRouter(
 			r.Post("/auth/ws-token", authH.wsToken)
 			r.Post("/auth/logout", authH.logout)
 			r.Get("/auth/devices", authH.listDevices)
+			r.Patch("/auth/devices/{deviceID}", authH.renameDevice)
 			r.Post("/auth/devices/{deviceID}/revoke", authH.revokeDevice)
 			r.With(LimitByUser(60, time.Minute)).Get("/auth/keys/status", keysH.keysStatus)
 			r.With(LimitByUser(20, time.Minute)).Put("/auth/keys", keysH.updateKeys)

@@ -190,6 +190,7 @@ export function useAuth() {
           if (restored.trustedKeys && Object.keys(restored.trustedKeys).length > 0) {
             await restoreTrustedKeysFromBackup(restored.trustedKeys)
           }
+          sessionStorage.setItem('backup_restored', '1')
           window.location.reload()
           return
         } catch {
