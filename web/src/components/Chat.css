@@ -632,6 +632,11 @@
   font-size: 13px;
 }
 
+.chat-identity-warning.chat-identity-warning--critical {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
 .chat-identity-warning p {
   margin: 0 0 8px;
   color: var(--text);
@@ -753,6 +758,10 @@
   gap: 4px;
   max-height: 200px;
   overflow-y: auto;
+}
+
+.chat-mt-8 {
+  margin-top: 8px;
 }
 
 .chat-mt-10 {

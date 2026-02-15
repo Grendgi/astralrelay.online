@@ -317,11 +317,11 @@ func (s *Service) UpdateKeys(ctx context.Context, userID int64, deviceID uuid.UU
 	}
 
 	if len(oneTimePrekeys) > 0 {
-		var current int
-		if err := s.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM one_time_prekeys WHERE device_id = $1`, deviceID).Scan(&current); err != nil {
+		var unconsumed int
+		if err := s.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM one_time_prekeys WHERE device_id = $1 AND consumed_at IS NULL`, deviceID).Scan(&unconsumed); err != nil {
 			return err
 		}
-		if current+len(oneTimePrekeys) > MaxOneTimePrekeysPerDevice {
+		if unconsumed+len(oneTimePrekeys) > MaxOneTimePrekeysPerDevice {
 			return ErrPrekeyQuotaExceeded
 		}
 		for _, pk := range oneTimePrekeys {
@@ -344,6 +344,17 @@ func (s *Service) UpdateKeys(ctx context.Context, userID int64, deviceID uuid.UU
 		}
 	}
 	return nil
+}
+
+// CleanupOldConsumedPrekeys removes consumed one-time prekeys older than 30 days to keep the table bounded.
+func (s *Service) CleanupOldConsumedPrekeys(ctx context.Context) (deleted int64, err error) {
+	res, err := s.db.Pool.Exec(ctx,
+		`DELETE FROM one_time_prekeys WHERE consumed_at IS NOT NULL AND consumed_at < NOW() - INTERVAL '30 days'`,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected(), nil
 }
 
 var (

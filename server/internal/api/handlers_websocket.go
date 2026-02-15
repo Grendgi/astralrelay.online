@@ -20,11 +20,9 @@ type streamHandler struct {
 	domain string
 }
 
-// extractWSToken reads ws_token from Sec-WebSocket-Protocol (bearer.TOKEN) or query param (fallback).
+// extractWSToken reads ws_token ONLY from Sec-WebSocket-Protocol (bearer.TOKEN).
+// Query param is intentionally ignored for security (logs, referrers, proxies).
 func extractWSToken(r *http.Request) string {
-	if s := r.URL.Query().Get("ws_token"); s != "" {
-		return s
-	}
 	for _, p := range strings.Split(r.Header.Get("Sec-WebSocket-Protocol"), ",") {
 		p = strings.TrimSpace(p)
 		if strings.HasPrefix(p, "bearer.") && len(p) > 7 {
@@ -37,7 +35,7 @@ func extractWSToken(r *http.Request) string {
 func (h *streamHandler) serveWs(w http.ResponseWriter, r *http.Request) {
 	wsToken := extractWSToken(r)
 	if wsToken == "" {
-		writeError(w, http.StatusUnauthorized, "missing_token", "ws_token required (Sec-WebSocket-Protocol: bearer.TOKEN or query param)")
+		writeError(w, http.StatusUnauthorized, "missing_token", "ws_token required via Sec-WebSocket-Protocol: bearer.TOKEN (query param not accepted)")
 		return
 	}
 	userID, _, err := h.auth.ValidateWSToken(wsToken)

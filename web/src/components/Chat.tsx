@@ -296,9 +296,10 @@ interface ChatProps {
   onLogout: () => void
   addOtpks?: (entries: import('../hooks/useAuth').OneTimePrekeyEntry[]) => Promise<void>
   rotateSignedPrekey?: (spk: { key: string; signature: string; secret: string; key_id: number }) => Promise<void>
+  lockKeysWithPassphrase?: (passphrase: string) => Promise<void>
 }
 
-export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey }: ChatProps) {
+export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey, lockKeysWithPassphrase }: ChatProps) {
   const { theme, toggleTheme } = useTheme()
   const [recipient, setRecipient] = useState(() => sessionStorage.getItem('chat_recipient') ?? '')
   const [message, setMessage] = useState('')
@@ -312,6 +313,10 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
   const [vpnLoading, setVpnLoading] = useState<string | null>(null)
   const [backupLoading, setBackupLoading] = useState(false)
   const [backupError, setBackupError] = useState<string | null>(null)
+  const [lockPassphrase, setLockPassphrase] = useState('')
+  const [lockPassphraseConfirm, setLockPassphraseConfirm] = useState('')
+  const [lockError, setLockError] = useState('')
+  const [lockLoading, setLockLoading] = useState(false)
   const [sendHint, setSendHint] = useState<string | null>(null)
   const [sendHintError, setSendHintError] = useState(false)
   const [sending, setSending] = useState(false)
@@ -982,7 +987,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
   const sendFile = async (file: File) => {
     if (!recipient) return
     const r = normalizeRecipient(recipient, user.user_id)
-    if (identityKeyChanged && identityKeyChanged.recipient === r && e2eeMode === 'strict') {
+    if (identityKeyChanged && identityKeyChanged.recipient === r) {
       setSendHint('Ключ собеседника изменился — подтвердите новый ключ перед отправкой')
       setSendHintError(true)
       return
@@ -1074,7 +1079,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
   const sendMessage = async () => {
     if (!recipient || !message.trim()) return
     const r = normalizeRecipient(recipient, user.user_id)
-    if (identityKeyChanged && identityKeyChanged.recipient === r && e2eeMode === 'strict') {
+    if (identityKeyChanged && identityKeyChanged.recipient === r) {
       setSendHint('Ключ собеседника изменился — подтвердите новый ключ перед отправкой')
       setSendHintError(true)
       return
@@ -1490,6 +1495,15 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
                     <input ref={restoreInputRef} type="file" accept=".dat" className="chat-input-hidden" onChange={(e) => { if (e.target.files?.[0]) handleRestoreBackup(); e.target.value = '' }} />
                     <button className="chat-vpn-btn" onClick={() => restoreInputRef.current?.click()} disabled={backupLoading}>Восстановить из бэкапа</button>
                   </div>
+                  {lockKeysWithPassphrase && keys && (
+                    <div className="chat-mt-10">
+                      <p className="chat-vpn-hint chat-mb-8">Защитить ключи паролем</p>
+                      <input type="password" placeholder="Пароль" value={lockPassphrase} onChange={(e) => { setLockPassphrase(e.target.value); setLockError('') }} className="chat-recipient-input chat-recipient-input-sm" />
+                      <input type="password" placeholder="Подтверждение" value={lockPassphraseConfirm} onChange={(e) => { setLockPassphraseConfirm(e.target.value); setLockError('') }} className="chat-recipient-input chat-recipient-input-sm chat-mt-8" />
+                      {lockError && <p className="chat-vpn-proto-hint chat-error-text">{lockError}</p>}
+                      <button className="chat-vpn-btn chat-mt-8" disabled={lockLoading || !lockPassphrase || lockPassphrase !== lockPassphraseConfirm} onClick={async () => { if (!lockPassphrase || lockPassphrase !== lockPassphraseConfirm) return; setLockError(''); setLockLoading(true); try { await lockKeysWithPassphrase(lockPassphrase) } catch (err) { setLockError(err instanceof Error ? err.message : 'Ошибка') } finally { setLockLoading(false) } }}>{lockLoading ? '…' : 'Защитить паролем'}</button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1700,6 +1714,44 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
                   Восстановить из бэкапа
                 </button>
               </div>
+              {lockKeysWithPassphrase && keys && (
+                <div className="chat-mt-10">
+                  <p className="chat-vpn-hint chat-mb-8">Защитить ключи паролем (опционально)</p>
+                  <input
+                    type="password"
+                    placeholder="Пароль"
+                    value={lockPassphrase}
+                    onChange={(e) => { setLockPassphrase(e.target.value); setLockError('') }}
+                    className="chat-recipient-input chat-recipient-input-sm"
+                  />
+                  <input
+                    type="password"
+                    placeholder="Подтверждение"
+                    value={lockPassphraseConfirm}
+                    onChange={(e) => { setLockPassphraseConfirm(e.target.value); setLockError('') }}
+                    className="chat-recipient-input chat-recipient-input-sm chat-mt-8"
+                  />
+                  {lockError && <p className="chat-vpn-proto-hint chat-error-text">{lockError}</p>}
+                  <button
+                    className="chat-vpn-btn chat-mt-8"
+                    disabled={lockLoading || !lockPassphrase || lockPassphrase !== lockPassphraseConfirm}
+                    onClick={async () => {
+                      if (!lockPassphrase || lockPassphrase !== lockPassphraseConfirm) return
+                      setLockError('')
+                      setLockLoading(true)
+                      try {
+                        await lockKeysWithPassphrase(lockPassphrase)
+                      } catch (err) {
+                        setLockError(err instanceof Error ? err.message : 'Ошибка')
+                      } finally {
+                        setLockLoading(false)
+                      }
+                    }}
+                  >
+                    {lockLoading ? '…' : 'Защитить паролем'}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1828,7 +1880,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
               </div>
             )}
             {identityKeyChanged && identityKeyChanged.recipient === normalizeRecipient(recipient, user.user_id) && (
-              <div className="chat-identity-warning">
+              <div className={`chat-identity-warning ${e2eeMode === 'compatibility' ? 'chat-identity-warning--critical' : ''}`}>
                 <p>
                   ⚠️ Ключ собеседника изменился. Возможна атака или переустановка.
                 </p>

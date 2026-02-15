@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react'
 import { api } from '../api/client'
 import { generateKeys, generateSignedPrekey } from '../crypto/keys'
 import { createBackup } from '../crypto/backup'
-import { getKeysFromStorage, setKeysInStorage, clearKeysFromStorage, migrateKeysFromLocalStorage, mergeOtpksToStorage, updateSignedPrekeyInStorage } from '../crypto/key-storage'
+import { getKeysFromStorage, setKeysInStorage, clearKeysFromStorage, migrateKeysFromLocalStorage, mergeOtpksToStorage, updateSignedPrekeyInStorage, isKeysEncrypted, unlockKeysWithPassphrase, setKeysWithPassphrase } from '../crypto/key-storage'
 import { initTrustedKeysStorage } from '../crypto/trusted-keys-storage'
 
 function randomUUID(): string {
@@ -47,10 +47,12 @@ export function useAuth() {
     localStorage.getItem('token')
   )
   const [keys, setKeys] = useState<StoredKeys | null>(null)
+  const [keysLocked, setKeysLocked] = useState(false)
 
   useEffect(() => {
     if (!user) {
       setKeys(null)
+      setKeysLocked(false)
       return
     }
     let cancelled = false
@@ -58,7 +60,10 @@ export function useAuth() {
       await initTrustedKeysStorage()
       const migrated = await migrateKeysFromLocalStorage()
       const k = migrated ?? (await getKeysFromStorage())
-      if (!cancelled) setKeys(k)
+      if (!cancelled) {
+        setKeys(k)
+        setKeysLocked(k == null && (await isKeysEncrypted()))
+      }
     })()
     return () => { cancelled = true }
   }, [user])
@@ -182,7 +187,22 @@ export function useAuth() {
     if (!user) return
     const k = await getKeysFromStorage()
     setKeys(k)
+    setKeysLocked(k == null && (await isKeysEncrypted()))
   }, [user])
+
+  const unlockKeys = useCallback(async (passphrase: string) => {
+    const k = await unlockKeysWithPassphrase(passphrase)
+    setKeys(k)
+    setKeysLocked(false)
+  }, [])
+
+  const lockKeysWithPassphrase = useCallback(async (passphrase: string) => {
+    const k = await getKeysFromStorage()
+    if (!k) return
+    await setKeysWithPassphrase(k, passphrase)
+    setKeys(null)
+    setKeysLocked(true)
+  }, [])
 
   const addOtpks = useCallback(async (entries: OneTimePrekeyEntry[]) => {
     await mergeOtpksToStorage(entries)
@@ -212,5 +232,5 @@ export function useAuth() {
     setToken(null)
   }, [token])
 
-  return { user, token, keys, register, login, logout, refreshKeys, addOtpks, rotateSignedPrekey }
+  return { user, token, keys, keysLocked, register, login, logout, refreshKeys, addOtpks, rotateSignedPrekey, unlockKeys, lockKeysWithPassphrase }
 }

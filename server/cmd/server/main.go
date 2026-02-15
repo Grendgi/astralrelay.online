@@ -157,14 +157,18 @@ func main() {
 	}
 	go api.StartLatencyProbe(context.Background(), database.Pool, redisURL)
 
-	// Periodic cleanup of expired/revoked access tokens (every 6h + once at startup)
+	// Periodic cleanup: tokens + consumed OTPK (every 6h + once at startup)
 	go func() {
 		run := func() {
-			n, err := authSvc.CleanupExpiredTokens(ctx)
-			if err != nil {
+			if n, err := authSvc.CleanupExpiredTokens(ctx); err != nil {
 				logjson.Log("server", map[string]interface{}{"op": "cleanup_tokens", "error": err.Error()})
 			} else if n > 0 {
 				logjson.Log("server", map[string]interface{}{"op": "cleanup_tokens", "deleted": n})
+			}
+			if n, err := keydirSvc.CleanupOldConsumedPrekeys(ctx); err != nil {
+				logjson.Log("server", map[string]interface{}{"op": "cleanup_otpk", "error": err.Error()})
+			} else if n > 0 {
+				logjson.Log("server", map[string]interface{}{"op": "cleanup_otpk", "deleted": n})
 			}
 		}
 		run() // once at startup
