@@ -38,6 +38,7 @@ MAIN_DOMAIN="${MAIN_DOMAIN:-}"      # домен main
 COORDINATOR_URL="${INSTALL_COORDINATOR_URL:-}"
 JOIN_TOKEN="${INSTALL_JOIN_TOKEN:-}"
 ALLOW_DOCKER_VAPID="${ALLOW_DOCKER_VAPID:-0}"
+LE_EMAIL="${INSTALL_LETSENCRYPT_EMAIL:-}"
 
 ACTION="${INSTALL_ACTION:-install}" # install|update
 
@@ -50,6 +51,7 @@ while [ $# -gt 0 ]; do
     --main-domain) MAIN_DOMAIN="$2"; shift ;;
     --coordinator-url) COORDINATOR_URL="$2"; shift ;;
     --join-token) JOIN_TOKEN="$2"; shift ;;
+    --letsencrypt-email) LE_EMAIL="$2"; shift ;;
     --allow-docker-vapid) ALLOW_DOCKER_VAPID=1 ;;
     --action) ACTION="$2"; shift ;;
     --auto) INSTALL_AUTO=1 ;;
@@ -59,11 +61,11 @@ Usage: sh install.sh [--wizard] [--mode main|selfhost] [--domain example.com]
                     [--address-mode standalone|subdomain]
                     [--main-domain astralrelay.online]
                     [--coordinator-url https://...:9443] [--join-token ...]
-                    [--action install|update]
+                    [--letsencrypt-email admin@example.com] [--action install|update]
 Env:
   INSTALL_AUTO=1 INSTALL_MODE=... INSTALL_DOMAIN=... INSTALL_ADDRESS_MODE=...
   MAIN_DOMAIN=... INSTALL_COORDINATOR_URL=... INSTALL_JOIN_TOKEN=...
-  ALLOW_DOCKER_VAPID=1
+  INSTALL_LETSENCRYPT_EMAIL=... ALLOW_DOCKER_VAPID=1
 EOF
       exit 0
       ;;
@@ -290,6 +292,13 @@ run_wizard() {
 
   DOMAIN="$(prompt_text "Домен (или оставь пустым для авто)" "$cur_domain")"
 
+  # Email для Let's Encrypt — запрашиваем при домене не localhost (main или selfhost с HTTPS)
+  if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ] && [ "$MODE" != "" ]; then
+    cur_le="$(get_env LETSENCRYPT_EMAIL "$env_file")"
+    [ -z "$cur_le" ] && cur_le="admin@$DOMAIN"
+    LE_EMAIL="$(prompt_text "Email для Let's Encrypt (сертификаты HTTPS)" "$cur_le")"
+  fi
+
   if [ "$MODE" = "selfhost" ]; then
     # Mesh
     cur_main="$(get_env FEDERATION_MAIN_DOMAIN "$env_file")"
@@ -341,6 +350,7 @@ run_wizard() {
   say "MODE:          $MODE"
   say "ACTION:        $ACTION"
   say "DOMAIN:        $DOMAIN"
+  [ -n "$LE_EMAIL" ] && say "LETSENCRYPT:    $LE_EMAIL"
   [ "$MODE" = "selfhost" ] && say "MAIN_DOMAIN:    ${MAIN_DOMAIN:-<no mesh>}"
   [ "$MODE" = "selfhost" ] && say "ADDRESS_MODE:   ${ADDRESS_MODE:-standalone}"
   [ "$MODE" = "selfhost" ] && [ -n "$COORDINATOR_URL" ] && say "COORDINATOR:    $COORDINATOR_URL"
@@ -417,9 +427,13 @@ if [ "$MODE" = "main" ]; then
   fi
 fi
 
-# LetsEncrypt email (если домен не localhost)
-if [ "$DOMAIN" != "localhost" ] && ! grep -q '^LETSENCRYPT_EMAIL=.' "$ENV_FILE" 2>/dev/null; then
-  update_env "LETSENCRYPT_EMAIL" "admin@$DOMAIN" "$ENV_FILE"
+# LetsEncrypt email (если домен не localhost; из wizard или авто admin@домен)
+if [ "$DOMAIN" != "localhost" ]; then
+  if [ -n "$LE_EMAIL" ]; then
+    update_env "LETSENCRYPT_EMAIL" "$LE_EMAIL" "$ENV_FILE"
+  elif ! grep -q '^LETSENCRYPT_EMAIL=.' "$ENV_FILE" 2>/dev/null; then
+    update_env "LETSENCRYPT_EMAIL" "admin@$DOMAIN" "$ENV_FILE"
+  fi
 fi
 
 # MAIN: сгенерировать traefik.yml из шаблона (подставить LETSENCRYPT_EMAIL)

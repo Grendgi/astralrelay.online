@@ -26,7 +26,10 @@ services:
       - server
       - web
     environment:
+      # Email для Let's Encrypt (обязательно для выдачи сертификатов)
       - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL:-}
+      # Traefik v3 читает email из этой переменной; иначе в конфиге остаётся плейсхолдер
+      - TRAEFIK_CERTIFICATESRESOLVERS_letsencrypt_ACME_EMAIL=${LETSENCRYPT_EMAIL:-}
   postgres:
     image: postgres:16-alpine
     environment:

@@ -88,6 +88,14 @@ A-запись: SERVER_DOMAIN → IP сервера. Для nip.io DNS уже н
 - Federation: https://YOUR_DOMAIN/.well-known/federation
 - Smoke: `./scripts/smoke-test.sh https://YOUR_DOMAIN`
 
+### Если Let's Encrypt не выдаёт сертификат
+
+1. **LETSENCRYPT_EMAIL** в `deploy/main/.env` — должен быть реальный email (не пустой и не `changeme@example.com`).
+2. **Порт 80** — с интернета должен быть доступен (ACME HTTP-01). Проверка: `curl -I http://YOUR_DOMAIN`.
+3. **DNS** — A-запись для `SERVER_DOMAIN` должна указывать на IP этого сервера.
+4. Логи Traefik: `docker compose -f deploy/main/docker-compose.yml logs traefik` — искать ошибки ACME/certificatesResolvers.
+5. Запуск через `./deploy/main/run.sh` (а не только `docker compose up`), чтобы подхватить `.env`.
+
 ---
 
 ## 6. HA (реплика PostgreSQL)
