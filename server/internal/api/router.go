@@ -73,6 +73,7 @@ func NewRouter(
 	vpnH := &vpnHandler{vpn: vpnSvc, domain: domain}
 	pushH := &pushHandler{push: pushSvc}
 	backupH := &backupHandler{db: database, enc: dbEnc, auth: authSvc}
+	statsH := &statsHandler{db: database}
 
 	r.Get("/.well-known/federation", fedH.wellKnown)
 	r.Route("/federation/v1", func(r chi.Router) {
@@ -91,6 +92,7 @@ func NewRouter(
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public (rate limited by IP)
+		r.With(LimitByIP(30, time.Minute)).Get("/stats", statsH.stats)
 		r.With(LimitByIP(5, time.Minute)).Post("/auth/register", authH.register)
 		r.With(LimitByIP(10, time.Minute)).Post("/auth/login", authH.login)
 

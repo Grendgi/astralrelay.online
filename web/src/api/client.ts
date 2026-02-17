@@ -57,6 +57,9 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  getStats: () =>
+    request<{ users: number; servers: number }>('/stats'),
+
   logout: (token: string) =>
     request<{ status: string }>('/auth/logout', {
       method: 'POST',
