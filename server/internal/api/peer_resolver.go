@@ -66,6 +66,14 @@ func getFederationPeers(ctx context.Context, database *db.DB, fedClient *federat
 				for _, s := range list {
 					if s != myLower {
 						peers[s] = struct{}{}
+						// Upsert into federation_peers so stats show correct count
+						if database != nil {
+							endpoint := "https://" + s + "/federation/v1"
+							_, _ = database.Pool.Exec(ctx,
+								`INSERT INTO federation_peers (domain, endpoint, allowed, updated_at) VALUES ($1, $2, TRUE, NOW())
+								 ON CONFLICT (domain) DO UPDATE SET endpoint = $2, updated_at = NOW()`,
+								s, endpoint)
+						}
 					}
 				}
 			}

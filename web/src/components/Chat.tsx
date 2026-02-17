@@ -1172,7 +1172,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
       } catch { /* fallback to legacy */ }
       const hasVerified = await getRecipientHasVerifiedDevice(r, deviceIds)
       if (!hasVerified) {
-        setSendHint('Strict: подтвердите Safety Number перед отправкой')
+        setSendHint('Подтвердите Safety Number перед отправкой (режим Strict)')
         setSendHintError(true)
         return
       }
@@ -1288,7 +1288,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
       } catch { /* fallback to legacy */ }
       const hasVerified = await getRecipientHasVerifiedDevice(r, deviceIds)
       if (!hasVerified) {
-        setSendHint('Strict: подтвердите Safety Number перед отправкой')
+        setSendHint('Подтвердите Safety Number перед отправкой (режим Strict)')
         setSendHintError(true)
         return
       }
@@ -1804,7 +1804,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
             <div className="chat-mt-10 chat-search-wrap">
               <input
                 type="text"
-                placeholder="Найти пользователя (имя с любого сервера)"
+                placeholder="Имя пользователя (домен указывать не нужно)"
                 value={recipient}
                 onChange={(e) => { setRecipient(e.target.value); setSendHint(null) }}
                 className="chat-recipient-input chat-recipient-input-sm"

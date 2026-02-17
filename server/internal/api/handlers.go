@@ -89,6 +89,12 @@ func (h *keysHandler) getBundleForUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "Bundle not found")
 		return
 	}
+	// Add device_id to response (frontend needs it for fingerprint/trust)
+	var out map[string]interface{}
+	if json.Unmarshal(data, &out) == nil {
+		out["device_id"] = devices[0]
+		data, _ = json.Marshal(out)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
