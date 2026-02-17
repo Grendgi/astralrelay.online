@@ -84,8 +84,10 @@ func ProxyForwardMiddleware() func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			// Handle locally: user search (current server + federation peers), don't forward to home
-			if r.URL.Path == "/api/v1/users/search" {
+			// Handle locally: user search, keys bundle/devices (resolve via local keydir or federation), don't forward
+			if r.URL.Path == "/api/v1/users/search" ||
+				strings.HasPrefix(r.URL.Path, "/api/v1/keys/bundle/") ||
+				strings.HasPrefix(r.URL.Path, "/api/v1/keys/devices/") {
 				next.ServeHTTP(w, r)
 				return
 			}
