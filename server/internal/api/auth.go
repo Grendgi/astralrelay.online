@@ -30,4 +30,5 @@ type authHandler struct {
 	domain    string
 	fedClient *federation.Client
 	db        *db.DB
+	fedPeers  []string // FEDERATION_PEERS: bootstrap domains for login discovery
 }

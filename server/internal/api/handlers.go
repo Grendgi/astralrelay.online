@@ -31,6 +31,7 @@ func extractDomain(addr string) string {
 type keysHandler struct {
 	keydir *keydir.Service
 	fed    *federation.Client
+	domain string
 }
 
 type relayHandler struct {
@@ -56,20 +57,40 @@ func (h *keysHandler) getBundleForUser(w http.ResponseWriter, r *http.Request) {
 		userID = d
 	}
 	bundle, deviceID, err := h.keydir.GetBundleForUser(r.Context(), userID)
-	if err == keydir.ErrNotFound || err == keydir.ErrInvalidUserID {
-		logjson.Log("keys_get_bundle", map[string]interface{}{"user_id": userID, "error": err.Error()})
-		writeError(w, http.StatusNotFound, "not_found", "Bundle not found")
+	if err == nil {
+		h.writeBundle(w, bundle, deviceID)
 		return
 	}
-	if err == keydir.ErrRemoteUser {
-		writeError(w, http.StatusNotFound, "remote_user", "Use /keys/bundle/{userID}/{deviceID} for remote users")
-		return
-	}
-	if err != nil {
+	if err != keydir.ErrNotFound && err != keydir.ErrInvalidUserID && err != keydir.ErrRemoteUser {
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
 	}
-	h.writeBundle(w, bundle, deviceID)
+	// Remote user: fetch device list and bundle from home server
+	var username, domain string
+	if _, scanErr := fmt.Sscanf(userID, "@%[^:]:%s", &username, &domain); scanErr != nil || domain == "" {
+		writeError(w, http.StatusNotFound, "not_found", "Bundle not found")
+		return
+	}
+	if strings.ToLower(strings.TrimSpace(domain)) == strings.ToLower(h.domain) {
+		writeError(w, http.StatusNotFound, "not_found", "Bundle not found")
+		return
+	}
+	if h.fed == nil {
+		writeError(w, http.StatusNotFound, "not_found", "Remote keys unavailable")
+		return
+	}
+	devices, fedErr := h.fed.FetchDeviceList(r.Context(), domain, userID)
+	if fedErr != nil || len(devices) == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "Bundle not found")
+		return
+	}
+	data, fedErr := h.fed.FetchKeys(r.Context(), domain, userID, devices[0])
+	if fedErr != nil {
+		writeError(w, http.StatusNotFound, "not_found", "Bundle not found")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
 }
 
 func (h *keysHandler) writeBundle(w http.ResponseWriter, bundle *keydir.Bundle, deviceID string) {
@@ -246,6 +267,16 @@ func (h *keysHandler) listDevicesForUser(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
+	}
+	// Remote user: if local returned empty and userID has different domain, fetch from home server
+	if len(deviceIDs) == 0 && h.fed != nil {
+		var username, domain string
+		if _, scanErr := fmt.Sscanf(userID, "@%[^:]:%s", &username, &domain); scanErr == nil && domain != "" && strings.ToLower(strings.TrimSpace(domain)) != strings.ToLower(h.domain) {
+			ids, fedErr := h.fed.FetchDeviceList(r.Context(), domain, userID)
+			if fedErr == nil && len(ids) > 0 {
+				deviceIDs = ids
+			}
+		}
 	}
 	devices := make([]map[string]interface{}, 0, len(deviceIDs))
 	for _, id := range deviceIDs {

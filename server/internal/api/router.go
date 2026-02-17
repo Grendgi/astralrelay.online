@@ -41,6 +41,7 @@ func NewRouter(
 	fedMainOnlyDomain string,
 	fedAlertWebhook string,
 	e2eeStrictOnly bool,
+	fedPeers []string,
 ) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -48,8 +49,8 @@ func NewRouter(
 	r.Use(anonymityLogger)
 	r.Use(cors.Handler(corsForDomain(domain)))
 
-	authH := &authHandler{auth: authSvc, domain: domain, fedClient: fedClient, db: database}
-	keysH := &keysHandler{keydir: keydirSvc, fed: fedClient}
+	authH := &authHandler{auth: authSvc, domain: domain, fedClient: fedClient, db: database, fedPeers: fedPeers}
+	keysH := &keysHandler{keydir: keydirSvc, fed: fedClient, domain: domain}
 	relayH := &relayHandler{relay: relaySvc, rooms: roomsSvc, fed: fedClient, domain: domain, hub: streamHub, push: pushSvc, auth: authSvc, e2eeStrictOnly: e2eeStrictOnly}
 	roomsH := &roomsHandler{rooms: roomsSvc}
 	mediaH := &mediaHandler{media: mediaSvc}
@@ -76,13 +77,14 @@ func NewRouter(
 	pushH := &pushHandler{push: pushSvc}
 	backupH := &backupHandler{db: database, enc: dbEnc, auth: authSvc}
 	statsH := &statsHandler{db: database}
-	usersH := &usersHandler{db: database, fedClient: fedClient, domain: domain}
+	usersH := &usersHandler{db: database, fedClient: fedClient, domain: domain, fedPeers: fedPeers}
 
 	r.Get("/.well-known/federation", fedH.wellKnown)
 	r.Route("/federation/v1", func(r chi.Router) {
 		r.Use(federationLogger)
 		r.Use(federationRecover)
 		r.Get("/keys/bundle/{userID}/{deviceID}", fedH.getKeys)
+		r.With(LimitByIP(60, time.Minute)).Get("/keys/devices/{userID}", fedH.getDevices)
 		r.With(LimitByIP(30, time.Minute)).Post("/auth/verify", fedH.authVerify)
 		r.With(LimitByIP(60, time.Minute)).Get("/users/lookup", fedH.usersLookup)
 		limit := fedRateLimit

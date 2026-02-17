@@ -191,6 +191,43 @@ func (c *Client) signRequest(method, url, body string) (headers map[string]strin
 	}
 }
 
+// FetchDeviceList fetches device list for a user from a remote server (for keys lookup).
+func (c *Client) FetchDeviceList(ctx context.Context, remoteDomain, userID string) ([]string, error) {
+	endpoint, err := c.resolveEndpoint(ctx, remoteDomain)
+	if err != nil {
+		return nil, err
+	}
+	path := strings.TrimSuffix(endpoint, "/") + "/keys/devices/" + url.PathEscape(userID)
+	req, _ := http.NewRequestWithContext(ctx, "GET", path, nil)
+	for k, v := range c.signRequest("GET", path, "") {
+		req.Header.Set(k, v)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("federation devices: %d %s", resp.StatusCode, string(data))
+	}
+	var out struct {
+		Devices []struct {
+			DeviceID string `json:"device_id"`
+		} `json:"devices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(out.Devices))
+	for _, d := range out.Devices {
+		if d.DeviceID != "" {
+			ids = append(ids, d.DeviceID)
+		}
+	}
+	return ids, nil
+}
+
 func (c *Client) FetchKeys(ctx context.Context, remoteDomain, userID, deviceID string) ([]byte, error) {
 	endpoint, err := c.resolveEndpoint(ctx, remoteDomain)
 	if err != nil {

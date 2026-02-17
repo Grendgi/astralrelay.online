@@ -81,8 +81,9 @@ type RedisConfig struct {
 }
 
 type FederationConfig struct {
-	Endpoint   string // e.g. https://example.org/federation
+	Endpoint   string   // e.g. https://example.org/federation
 	Enabled    bool
+	Peers      []string // FEDERATION_PEERS: bootstrap domains for user lookup & login (e.g. astralrelay.online,82.97.250.36.nip.io)
 	Security   FederationSecurityConfig
 	Mode       string // open, main_only
 	MainDomain string // for main_only: only accept from & send via this domain
@@ -143,6 +144,7 @@ func Load() (*Config, error) {
 		Federation: FederationConfig{
 			Endpoint:   fmt.Sprintf("https://%s/federation", domain),
 			Enabled:    true,
+			Peers:      splitTrim(getEnv("FEDERATION_PEERS", ""), ","),
 			Mode:       getEnv("FEDERATION_MODE", "open"),
 			MainDomain: getEnv("FEDERATION_MAIN_DOMAIN", ""),
 			MTLS: FederationMTLSConfig{

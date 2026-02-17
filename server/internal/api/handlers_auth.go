@@ -225,19 +225,31 @@ func (h *authHandler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Local user not found or wrong password — try to discover home server via federation
-	if h.fedClient != nil && h.db != nil {
-		rows, qErr := h.db.Pool.Query(r.Context(), `SELECT domain FROM federation_peers WHERE allowed = TRUE AND domain != $1`, h.domain)
-		if qErr == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var peerDomain string
-				if rows.Scan(&peerDomain) == nil {
-					if _, homeDomain, found := h.fedClient.UserLookup(r.Context(), peerDomain, username); found {
-						domain = homeDomain
-						break
+	// Local user not found — try to discover home server via federation (DB peers + FEDERATION_PEERS)
+	if h.fedClient != nil {
+		peers := make(map[string]struct{})
+		for _, p := range h.fedPeers {
+			d := strings.ToLower(strings.TrimSpace(p))
+			if d != "" && d != strings.ToLower(h.domain) {
+				peers[d] = struct{}{}
+			}
+		}
+		if h.db != nil {
+			rows, qErr := h.db.Pool.Query(r.Context(), `SELECT domain FROM federation_peers WHERE allowed = TRUE AND domain != $1`, h.domain)
+			if qErr == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var peerDomain string
+					if rows.Scan(&peerDomain) == nil {
+						peers[strings.ToLower(strings.TrimSpace(peerDomain))] = struct{}{}
 					}
 				}
+			}
+		}
+		for peerDomain := range peers {
+			if _, homeDomain, found := h.fedClient.UserLookup(r.Context(), peerDomain, username); found {
+				domain = homeDomain
+				break
 			}
 		}
 		if domain != h.domain {

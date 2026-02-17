@@ -12,6 +12,7 @@ type usersHandler struct {
 	db        *db.DB
 	fedClient *federation.Client
 	domain    string
+	fedPeers  []string // FEDERATION_PEERS: bootstrap domains for search
 }
 
 // search handles GET /api/v1/users/search?q=... — returns users matching the query (local + federated peers). No domain needed.
@@ -48,8 +49,14 @@ func (h *usersHandler) search(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Federated: ask each peer for exact username match
-	if h.fedClient != nil && h.db != nil {
+	// Federated: DB peers + FEDERATION_PEERS (bootstrap)
+	peers := make(map[string]struct{})
+	for _, p := range h.fedPeers {
+		if d := strings.ToLower(strings.TrimSpace(p)); d != "" && d != strings.ToLower(h.domain) {
+			peers[d] = struct{}{}
+		}
+	}
+	if h.db != nil {
 		rows, err := h.db.Pool.Query(r.Context(),
 			`SELECT domain FROM federation_peers WHERE allowed = TRUE AND domain != $1`,
 			h.domain,
@@ -59,12 +66,17 @@ func (h *usersHandler) search(w http.ResponseWriter, r *http.Request) {
 			for rows.Next() {
 				var peer string
 				if rows.Scan(&peer) == nil {
-					if userID, _, found := h.fedClient.UserLookup(r.Context(), peer, q); found && userID != "" {
-						if _, ok := seen[userID]; !ok {
-							seen[userID] = struct{}{}
-							users = append(users, map[string]string{"user_id": userID})
-						}
-					}
+					peers[strings.ToLower(strings.TrimSpace(peer))] = struct{}{}
+				}
+			}
+		}
+	}
+	for peer := range peers {
+		if h.fedClient != nil {
+			if userID, _, found := h.fedClient.UserLookup(r.Context(), peer, q); found && userID != "" {
+				if _, ok := seen[userID]; !ok {
+					seen[userID] = struct{}{}
+					users = append(users, map[string]string{"user_id": userID})
 				}
 			}
 		}

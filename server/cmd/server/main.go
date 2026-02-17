@@ -149,7 +149,7 @@ func main() {
 	}
 	fedSecurity := federation.NewSecurityService(fedSecCfg)
 
-	router := api.NewRouter(authSvc, keydirSvc, relaySvc, roomsSvc, mediaSvc, fedClient, fedKeys, cfg.Server.Domain, streamHub, vpnSvc, pushSvc, database, dbEnc, fedSecurity, cfg.Federation.Security.RateLimit, fedMainOnlyDomain, cfg.Federation.Security.AlertWebhookURL, cfg.Server.E2EEStrictOnly)
+	router := api.NewRouter(authSvc, keydirSvc, relaySvc, roomsSvc, mediaSvc, fedClient, fedKeys, cfg.Server.Domain, streamHub, vpnSvc, pushSvc, database, dbEnc, fedSecurity, cfg.Federation.Security.RateLimit, fedMainOnlyDomain, cfg.Federation.Security.AlertWebhookURL, cfg.Server.E2EEStrictOnly, cfg.Federation.Peers)
 
 	redisURL := ""
 	if !cfg.Redis.Disabled && cfg.Redis.URL != "" {

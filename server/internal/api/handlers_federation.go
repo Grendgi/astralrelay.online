@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -93,6 +94,39 @@ func (h *federationHandler) getKeys(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// getDevices handles GET /federation/v1/keys/devices/{userID} — returns device list for a local user (for remote keys lookup).
+func (h *federationHandler) getDevices(w http.ResponseWriter, r *http.Request) {
+	userID := chi.URLParam(r, "userID")
+	if userID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "userID required")
+		return
+	}
+	if u, err := url.PathUnescape(userID); err == nil {
+		userID = u
+	}
+	// Only return devices for users on this server
+	if idx := strings.Index(userID, ":"); idx >= 0 {
+		if domain := strings.ToLower(strings.TrimSpace(userID[idx+1:])); domain != strings.ToLower(h.domain) {
+			writeError(w, http.StatusForbidden, "wrong_domain", "User not on this server")
+			return
+		}
+	}
+	deviceIDs, err := h.keydir.ListDevicesForUser(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "User not found")
+		return
+	}
+	out := make([]map[string]interface{}, 0, len(deviceIDs))
+	for _, id := range deviceIDs {
+		d := map[string]interface{}{"device_id": id, "status": "active"}
+		if dev, err := uuid.Parse(id); err == nil {
+			d["signal_device_id"] = keydir.UUIDToSignalDeviceID(dev)
+		}
+		out = append(out, d)
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"devices": out})
 }
 
 func (h *federationHandler) authVerify(w http.ResponseWriter, r *http.Request) {
