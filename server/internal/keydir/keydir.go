@@ -67,12 +67,14 @@ func (s *Service) GetBundle(ctx context.Context, userID, deviceID string) (*Bund
 		return nil, ErrInvalidDeviceID
 	}
 
+	// Match by request domain OR server domain — users may have u.domain = s.dom (e.g. localhost)
+	// while request uses public domain (e.g. 82.97.250.36.nip.io); ListDevicesForUser uses s.dom.
 	err = s.db.Pool.QueryRow(ctx,
 		`SELECT d.identity_key, d.signed_prekey, d.signed_prekey_sig, d.signed_prekey_id
 		 FROM devices d
 		 JOIN users u ON u.id = d.user_id
-		 WHERE LOWER(u.username) = LOWER($1) AND (u.domain = $2 OR (u.domain IN ('localhost','127.0.0.1') AND $2 IN ('localhost','127.0.0.1'))) AND d.id = $3`,
-		username, domain, devUUID,
+		 WHERE LOWER(u.username) = LOWER($1) AND (u.domain = $2 OR u.domain = $3 OR (u.domain IN ('localhost','127.0.0.1') AND ($2 IN ('localhost','127.0.0.1') OR $3 IN ('localhost','127.0.0.1')))) AND d.id = $4`,
+		username, domain, s.dom, devUUID,
 	).Scan(&identityKey, &signedPrekey, &signedPrekeySig, &signedPrekeyID)
 	if err == pgx.ErrNoRows {
 		return nil, ErrNotFound
