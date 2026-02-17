@@ -84,6 +84,11 @@ func ProxyForwardMiddleware() func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
+			// Handle locally: user search (current server + federation peers), don't forward to home
+			if r.URL.Path == "/api/v1/users/search" {
+				next.ServeHTTP(w, r)
+				return
+			}
 			// Forward to home server: https://home_domain + path + query
 			scheme := "https"
 			if r.TLS == nil && strings.HasPrefix(r.Host, "localhost") {

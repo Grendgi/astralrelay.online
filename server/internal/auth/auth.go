@@ -648,7 +648,12 @@ func (s *Service) CreateProxySession(ctx context.Context, homeDomain, homeToken,
 
 // GetProxySessionByToken returns proxy session if the token is valid and not expired.
 func (s *Service) GetProxySessionByToken(ctx context.Context, token string) (*ProxySession, error) {
-	h := sha256.Sum256([]byte(token))
+	// Token is hex-encoded 32 bytes; we stored sha256(raw bytes), so decode then hash.
+	tokBytes, decErr := hex.DecodeString(token)
+	if decErr != nil || len(tokBytes) != 32 {
+		return nil, ErrInvalidToken
+	}
+	h := sha256.Sum256(tokBytes)
 	var homeDomain, homeToken, userID, deviceID string
 	var expiresAt time.Time
 	err := s.db.Pool.QueryRow(ctx,

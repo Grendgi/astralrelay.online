@@ -76,6 +76,7 @@ func NewRouter(
 	pushH := &pushHandler{push: pushSvc}
 	backupH := &backupHandler{db: database, enc: dbEnc, auth: authSvc}
 	statsH := &statsHandler{db: database}
+	usersH := &usersHandler{db: database, fedClient: fedClient, domain: domain}
 
 	r.Get("/.well-known/federation", fedH.wellKnown)
 	r.Route("/federation/v1", func(r chi.Router) {
@@ -117,6 +118,7 @@ func NewRouter(
 			r.With(LimitByUser(120, time.Minute)).Get("/keys/bundle/{userID}", keysH.getBundleForUser)
 			r.With(LimitByUser(120, time.Minute)).Get("/keys/bundle/{userID}/{deviceID}", keysH.getBundle)
 			r.With(LimitByUser(60, time.Minute)).Get("/keys/devices/{userID}", keysH.listDevicesForUser)
+			r.With(LimitByUser(60, time.Minute)).Get("/users/search", usersH.search)
 			r.With(LimitByUser(60, time.Minute)).Post("/messages/send", relayH.send)
 			r.Post("/messages/typing", relayH.typing)
 			r.Post("/messages/read", relayH.read)

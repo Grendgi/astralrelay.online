@@ -351,6 +351,8 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
   const [createRoomLoading, setCreateRoomLoading] = useState(false)
   const [roomMembers, setRoomMembers] = useState<Array<{ user_id: number; username: string; domain: string; address: string; role: string }>>([])
   const [roomMembersVisible, setRoomMembersVisible] = useState(false)
+  const [searchResults, setSearchResults] = useState<Array<{ user_id: string }>>([])
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [inviteUsername, setInviteUsername] = useState('')
   const [inviteLoading, setInviteLoading] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -615,6 +617,27 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
     }
     sessionStorage.setItem('chat_recipient', recipient)
   }, [recipient])
+
+  // Поиск пользователей по имени (без указания домена)
+  useEffect(() => {
+    const q = recipient.trim()
+    if (q.length < 2 || q.includes(':') || q.startsWith('!')) {
+      setSearchResults([])
+      return
+    }
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+    searchDebounceRef.current = setTimeout(() => {
+      searchDebounceRef.current = null
+      if (!token) return
+      api.usersSearch(q, token).then(
+        (r) => setSearchResults((r.users || []).filter((u) => u.user_id !== user?.user_id)),
+        () => setSearchResults([]),
+      )
+    }, 300)
+    return () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+    }
+  }, [recipient, token, user?.user_id])
 
   // Непрочитанные: lastReadTs на чат, обновляем при открытии
   const lastReadKey = (addr: string) => `chat_last_read_${addr}`
@@ -1778,14 +1801,29 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
                 })
               )}
             </div>
-            <div className="chat-mt-10">
+            <div className="chat-mt-10 chat-search-wrap">
               <input
                 type="text"
-                placeholder="Новый чат: пользователь или @user:domain"
+                placeholder="Найти пользователя (имя с любого сервера)"
                 value={recipient}
                 onChange={(e) => { setRecipient(e.target.value); setSendHint(null) }}
                 className="chat-recipient-input chat-recipient-input-sm"
               />
+              {searchResults.length > 0 && (
+                <ul className="chat-search-dropdown">
+                  {searchResults.map((u) => (
+                    <li key={u.user_id}>
+                      <button
+                        type="button"
+                        className="chat-room-item chat-room-item--full"
+                        onClick={() => { setRecipient(u.user_id); setSearchResults([]) }}
+                      >
+                        {u.user_id}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </div>
           <div className="chat-sidebar-section">
@@ -2219,7 +2257,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
                   if (e.target.files?.length) sendFiles(e.target.files)
                   e.target.value = ''
                 }}
-                disabled={uploading || !recipient}
+                disabled={uploading || !recipient || (!!recipient.trim() && !recipient.includes(':') && !recipient.startsWith('!'))}
               />
               {uploading ? '⏳' : '📎'}
             </label>
@@ -2244,7 +2282,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
             />
             <button
               onClick={sendMessage}
-              disabled={uploading || !recipient || sending}
+              disabled={uploading || !recipient || sending || (!!recipient.trim() && !recipient.includes(':') && !recipient.startsWith('!'))}
               className="chat-send-btn btn-primary"
             >
               {sending ? '…' : 'Отправить →'}

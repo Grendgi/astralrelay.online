@@ -72,6 +72,10 @@ export const api = {
       token,
     }),
 
+  /** Поиск пользователей по имени (локальные + федерация). Домен указывать не нужно. */
+  usersSearch: (q: string, token: string) =>
+    request<{ users: Array<{ user_id: string }> }>(`/users/search?q=${encodeURIComponent(q.trim())}`, { token }),
+
   listDevices: (token: string) =>
     request<{ devices: Array<{ device_id: string; name?: string; created_at: string; is_current: boolean }> }>('/auth/devices', { token }),
 
@@ -358,6 +362,12 @@ export const api = {
     onConnectionChange?: (connected: boolean) => void,
   ) => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    // For federated users (@user:domain), ws_token is from home server — open WebSocket to home host
+    const match = recipient.match(/^@[^:]+:(.+)$/)
+    const streamHost =
+      match && match[1] && match[1].toLowerCase() !== window.location.host.toLowerCase()
+        ? match[1]
+        : window.location.host
     let ws: WebSocket
     let retries = 0
     const maxRetries = 5
@@ -367,7 +377,7 @@ export const api = {
       api.getWSToken(token).then(
         (res) => {
           if (stopped) return
-          const url = `${protocol}//${window.location.host}${API_BASE}/messages/stream?as=${encodeURIComponent(recipient)}`
+          const url = `${protocol}//${streamHost}${API_BASE}/messages/stream?as=${encodeURIComponent(recipient)}`
           ws = new WebSocket(url, ['bearer.' + res.ws_token])
           ws.onopen = () => {
             retries = 0
