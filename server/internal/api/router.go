@@ -68,6 +68,7 @@ func NewRouter(
 		fedClient:       fedClient,
 		mainOnlyDomain:  fedMainOnlyDomain,
 		alertWebhookURL: fedAlertWebhook,
+		db:              database,
 	}
 	streamH := &streamHandler{hub: streamHub, auth: authSvc, domain: domain}
 	vpnH := &vpnHandler{vpn: vpnSvc, domain: domain}

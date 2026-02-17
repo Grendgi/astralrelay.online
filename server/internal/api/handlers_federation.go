@@ -9,9 +9,10 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/messenger/server/internal/db"
 	"github.com/messenger/server/internal/federation"
-	"github.com/messenger/server/internal/logjson"
 	"github.com/messenger/server/internal/keydir"
+	"github.com/messenger/server/internal/logjson"
 	"github.com/messenger/server/internal/relay"
 	"github.com/messenger/server/internal/stream"
 )
@@ -27,6 +28,7 @@ type federationHandler struct {
 	fedClient       *federation.Client
 	mainOnlyDomain  string
 	alertWebhookURL string // optional: POST on rate limit / blocklist
+	db              *db.DB
 }
 
 func (h *federationHandler) wellKnown(w http.ResponseWriter, r *http.Request) {
@@ -127,6 +129,16 @@ func (h *federationHandler) transaction(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	// Record origin as federation peer for stats (known servers)
+	if h.db != nil {
+		originLower := strings.ToLower(strings.TrimSpace(origin))
+		endpoint := "https://" + originLower + "/federation/v1"
+		_, _ = h.db.Pool.Exec(r.Context(),
+			`INSERT INTO federation_peers (domain, endpoint, allowed, updated_at) VALUES ($1, $2, TRUE, NOW())
+			 ON CONFLICT (domain) DO UPDATE SET endpoint = $2, updated_at = NOW()`,
+			originLower, endpoint)
+	}
+
 	if req.Destination != h.domain {
 		// Relay: forward to destination (Main hub only)
 		if h.fedClient != nil {
