@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -149,7 +150,16 @@ func main() {
 	}
 	fedSecurity := federation.NewSecurityService(fedSecCfg)
 
-	router := api.NewRouter(authSvc, keydirSvc, relaySvc, roomsSvc, mediaSvc, fedClient, fedKeys, cfg.Server.Domain, streamHub, vpnSvc, pushSvc, database, dbEnc, fedSecurity, cfg.Federation.Security.RateLimit, fedMainOnlyDomain, cfg.Federation.Security.AlertWebhookURL, cfg.Server.E2EEStrictOnly, cfg.Federation.Peers)
+	router := api.NewRouter(authSvc, keydirSvc, relaySvc, roomsSvc, mediaSvc, fedClient, fedKeys, cfg.Server.Domain, streamHub, vpnSvc, pushSvc, database, dbEnc, fedSecurity, cfg.Federation.Security.RateLimit, fedMainOnlyDomain, cfg.Federation.Security.AlertWebhookURL, cfg.Server.E2EEStrictOnly, cfg.Federation.Peers, cfg.Federation.DiscoveryHub)
+
+	// Auto-register with discovery hub (so main server knows about us for federation)
+	if hub := cfg.Federation.DiscoveryHub; hub != "" && strings.ToLower(strings.TrimSpace(cfg.Server.Domain)) != strings.ToLower(strings.TrimSpace(hub)) && fedClient != nil {
+		go func() {
+			if err := fedClient.Register(ctx, hub); err != nil {
+				logjson.Log("federation_register", map[string]interface{}{"hub": hub, "error": err.Error()})
+			}
+		}()
+	}
 
 	redisURL := ""
 	if !cfg.Redis.Disabled && cfg.Redis.URL != "" {

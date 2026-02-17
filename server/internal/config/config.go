@@ -81,13 +81,14 @@ type RedisConfig struct {
 }
 
 type FederationConfig struct {
-	Endpoint   string   // e.g. https://example.org/federation
-	Enabled    bool
-	Peers      []string // FEDERATION_PEERS: bootstrap domains for user lookup & login (e.g. astralrelay.online,82.97.250.36.nip.io)
-	Security   FederationSecurityConfig
-	Mode       string // open, main_only
-	MainDomain string // for main_only: only accept from & send via this domain
-	MTLS       FederationMTLSConfig
+	Endpoint        string   // e.g. https://example.org/federation
+	Enabled         bool
+	Peers           []string // FEDERATION_PEERS: bootstrap domains (manual fallback)
+	DiscoveryHub    string   // FEDERATION_DISCOVERY_HUB: hub for auto-fetching server list; default astralrelay.online when SERVER_DOMAIN != astralrelay.online
+	Security        FederationSecurityConfig
+	Mode            string // open, main_only
+	MainDomain      string // for main_only: only accept from & send via this domain
+	MTLS            FederationMTLSConfig
 }
 
 type FederationMTLSConfig struct {
@@ -142,11 +143,12 @@ func Load() (*Config, error) {
 			Disabled: redisDisabled,
 		},
 		Federation: FederationConfig{
-			Endpoint:   fmt.Sprintf("https://%s/federation", domain),
-			Enabled:    true,
-			Peers:      splitTrim(getEnv("FEDERATION_PEERS", ""), ","),
-			Mode:       getEnv("FEDERATION_MODE", "open"),
-			MainDomain: getEnv("FEDERATION_MAIN_DOMAIN", ""),
+			Endpoint:     fmt.Sprintf("https://%s/federation", domain),
+			Enabled:      true,
+			Peers:        splitTrim(getEnv("FEDERATION_PEERS", ""), ","),
+			DiscoveryHub: getEnv("FEDERATION_DISCOVERY_HUB", defaultDiscoveryHub(domain)),
+			Mode:         getEnv("FEDERATION_MODE", "open"),
+			MainDomain:   getEnv("FEDERATION_MAIN_DOMAIN", ""),
 			MTLS: FederationMTLSConfig{
 				ClientCert: getEnv("FEDERATION_MTLS_CLIENT_CERT", ""),
 				ClientKey:  getEnv("FEDERATION_MTLS_CLIENT_KEY", ""),
@@ -201,6 +203,15 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func defaultDiscoveryHub(domain string) string {
+	// Auto-discovery: selfhosts use astralrelay.online as hub by default (zero config)
+	d := strings.ToLower(strings.TrimSpace(domain))
+	if d == "" || d == "localhost" || d == "127.0.0.1" || d == "astralrelay.online" {
+		return ""
+	}
+	return "astralrelay.online"
 }
 
 func splitTrim(s, sep string) []string {

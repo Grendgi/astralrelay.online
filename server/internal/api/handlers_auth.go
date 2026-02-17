@@ -225,27 +225,9 @@ func (h *authHandler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Local user not found — try to discover home server via federation (DB peers + FEDERATION_PEERS)
+	// Local user not found — discover home server via federation (DB + FEDERATION_PEERS + discovery hub)
 	if h.fedClient != nil {
-		peers := make(map[string]struct{})
-		for _, p := range h.fedPeers {
-			d := strings.ToLower(strings.TrimSpace(p))
-			if d != "" && d != strings.ToLower(h.domain) {
-				peers[d] = struct{}{}
-			}
-		}
-		if h.db != nil {
-			rows, qErr := h.db.Pool.Query(r.Context(), `SELECT domain FROM federation_peers WHERE allowed = TRUE AND domain != $1`, h.domain)
-			if qErr == nil {
-				defer rows.Close()
-				for rows.Next() {
-					var peerDomain string
-					if rows.Scan(&peerDomain) == nil {
-						peers[strings.ToLower(strings.TrimSpace(peerDomain))] = struct{}{}
-					}
-				}
-			}
-		}
+		peers := getFederationPeers(r.Context(), h.db, h.fedClient, h.fedPeers, h.discoveryHub, h.domain)
 		for peerDomain := range peers {
 			if _, homeDomain, found := h.fedClient.UserLookup(r.Context(), peerDomain, username); found {
 				domain = homeDomain

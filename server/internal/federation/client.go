@@ -158,6 +158,60 @@ func (c *Client) resolveEndpoint(ctx context.Context, remoteDomain string) (stri
 	return endpoint, nil
 }
 
+// FetchServersList fetches list of federation servers from a hub (GET /.well-known/federation-servers).
+func (c *Client) FetchServersList(ctx context.Context, hubDomain string) ([]string, error) {
+	scheme := c.scheme(hubDomain)
+	path := fmt.Sprintf("%s://%s/.well-known/federation-servers", scheme, hubDomain)
+	req, _ := http.NewRequestWithContext(ctx, "GET", path, nil)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch servers: %d", resp.StatusCode)
+	}
+	var out struct {
+		Servers []string `json:"servers"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	var list []string
+	for _, s := range out.Servers {
+		d := strings.ToLower(strings.TrimSpace(s))
+		if d != "" {
+			list = append(list, d)
+		}
+	}
+	return list, nil
+}
+
+// Register adds this server as a federation peer on the hub (POST /federation/v1/register).
+func (c *Client) Register(ctx context.Context, hubDomain string) error {
+	endpoint, err := c.resolveEndpoint(ctx, hubDomain)
+	if err != nil {
+		return err
+	}
+	path := strings.TrimSuffix(endpoint, "/") + "/register"
+	body := fmt.Sprintf(`{"domain":"%s"}`, strings.ReplaceAll(c.domain, `"`, `\"`))
+	req, _ := http.NewRequestWithContext(ctx, "POST", path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range c.signRequest("POST", path, body) {
+		req.Header.Set(k, v)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("register: %d %s", resp.StatusCode, string(data))
+	}
+	return nil
+}
+
 func (c *Client) signRequest(method, url, body string) (headers map[string]string) {
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 	dest := ""

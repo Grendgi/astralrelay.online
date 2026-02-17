@@ -67,6 +67,67 @@ func (h *federationHandler) wellKnown(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// federationServers returns GET /.well-known/federation-servers — list of known federation servers (self + federation_peers from DB).
+func (h *federationHandler) federationServers(w http.ResponseWriter, r *http.Request) {
+	servers := []string{strings.ToLower(h.domain)}
+	if h.db != nil {
+		rows, err := h.db.Pool.Query(r.Context(), `SELECT domain FROM federation_peers WHERE allowed = TRUE ORDER BY domain`)
+		if err == nil {
+			defer rows.Close()
+			seen := map[string]struct{}{strings.ToLower(h.domain): {}}
+			for rows.Next() {
+				var d string
+				if rows.Scan(&d) == nil {
+					d = strings.ToLower(strings.TrimSpace(d))
+					if d != "" && d != strings.ToLower(h.domain) {
+						if _, ok := seen[d]; !ok {
+							seen[d] = struct{}{}
+							servers = append(servers, d)
+						}
+					}
+				}
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"servers": servers})
+}
+
+// register handles POST /federation/v1/register — add self as federation peer (signed request).
+func (h *federationHandler) register(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+	origin := r.Header.Get("X-Server-Origin")
+	if origin == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "X-Server-Origin required")
+		return
+	}
+	origin = strings.ToLower(strings.TrimSpace(origin))
+	if origin == strings.ToLower(h.domain) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Cannot register self")
+		return
+	}
+	body, _ := io.ReadAll(io.LimitReader(r.Body, int64(256)))
+	originKey, err := federation.FetchServerKey(r.Context(), origin)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid_origin", "Cannot fetch origin server key")
+		return
+	}
+	if err := federation.VerifyRequest(r, body, originKey); err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid_signature", err.Error())
+		return
+	}
+	if h.db != nil {
+		endpoint := "https://" + origin + "/federation/v1"
+		_, _ = h.db.Pool.Exec(r.Context(),
+			`INSERT INTO federation_peers (domain, endpoint, allowed, updated_at) VALUES ($1, $2, TRUE, NOW())
+			 ON CONFLICT (domain) DO UPDATE SET endpoint = $2, allowed = TRUE, updated_at = NOW()`,
+			origin, endpoint)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (h *federationHandler) getKeys(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "userID")
 	deviceID := chi.URLParam(r, "deviceID")

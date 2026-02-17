@@ -26,9 +26,10 @@ type AuthService interface {
 }
 
 type authHandler struct {
-	auth      AuthService
-	domain    string
-	fedClient *federation.Client
-	db        *db.DB
-	fedPeers  []string // FEDERATION_PEERS: bootstrap domains for login discovery
+	auth          AuthService
+	domain        string
+	fedClient     *federation.Client
+	db            *db.DB
+	fedPeers     []string // FEDERATION_PEERS: manual bootstrap
+	discoveryHub string   // FEDERATION_DISCOVERY_HUB: auto-fetch servers (default astralrelay.online for selfhosts)
 }

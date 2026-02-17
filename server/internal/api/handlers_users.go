@@ -9,10 +9,11 @@ import (
 )
 
 type usersHandler struct {
-	db        *db.DB
-	fedClient *federation.Client
-	domain    string
-	fedPeers  []string // FEDERATION_PEERS: bootstrap domains for search
+	db           *db.DB
+	fedClient    *federation.Client
+	domain       string
+	fedPeers     []string // FEDERATION_PEERS: manual bootstrap
+	discoveryHub string   // FEDERATION_DISCOVERY_HUB: auto-fetch servers
 }
 
 // search handles GET /api/v1/users/search?q=... — returns users matching the query (local + federated peers). No domain needed.
@@ -49,28 +50,8 @@ func (h *usersHandler) search(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Federated: DB peers + FEDERATION_PEERS (bootstrap)
-	peers := make(map[string]struct{})
-	for _, p := range h.fedPeers {
-		if d := strings.ToLower(strings.TrimSpace(p)); d != "" && d != strings.ToLower(h.domain) {
-			peers[d] = struct{}{}
-		}
-	}
-	if h.db != nil {
-		rows, err := h.db.Pool.Query(r.Context(),
-			`SELECT domain FROM federation_peers WHERE allowed = TRUE AND domain != $1`,
-			h.domain,
-		)
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var peer string
-				if rows.Scan(&peer) == nil {
-					peers[strings.ToLower(strings.TrimSpace(peer))] = struct{}{}
-				}
-			}
-		}
-	}
+	// Federated: DB peers + FEDERATION_PEERS + discovery hub (auto-fetch)
+	peers := getFederationPeers(r.Context(), h.db, h.fedClient, h.fedPeers, h.discoveryHub, h.domain)
 	for peer := range peers {
 		if h.fedClient != nil {
 			if userID, _, found := h.fedClient.UserLookup(r.Context(), peer, q); found && userID != "" {
