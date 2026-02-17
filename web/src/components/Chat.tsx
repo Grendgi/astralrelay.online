@@ -1223,7 +1223,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
           }
         } catch (e) {
           if (e instanceof ApiError && e.status === 404) {
-            setSendHint('Пользователь не найден')
+            setSendHint('Ключи получателя недоступны')
             setSendHintError(true)
             return
           }
@@ -1259,7 +1259,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
       })
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
-        setSendHint('Пользователь не найден')
+        setSendHint('Ключи получателя недоступны')
         setSendHintError(true)
       } else {
         logError('Send/file', e)
@@ -1331,7 +1331,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
           }
         } catch (e) {
           if (e instanceof ApiError && e.status === 404) {
-            setSendHint('Пользователь не найден')
+            setSendHint('Ключи получателя недоступны')
             setSendHintError(true)
             return
           }
@@ -1369,7 +1369,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
       })
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
-        setSendHint('Пользователь не найден')
+        setSendHint('Ключи получателя недоступны')
         setSendHintError(true)
       } else {
         logError('Send/file', e)
@@ -1780,13 +1780,13 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
                     <button className="chat-vpn-btn" onClick={() => restoreInputRef.current?.click()} disabled={backupLoading}>Восстановить из бэкапа</button>
                   </div>
                   {lockKeysWithPassphrase && keys && (
-                    <div className="chat-mt-10">
+                    <form className="chat-mt-10" onSubmit={async (e) => { e.preventDefault(); if (!lockPassphrase || lockPassphrase !== lockPassphraseConfirm) return; setLockError(''); setLockLoading(true); try { await lockKeysWithPassphrase(lockPassphrase) } catch (err) { setLockError(err instanceof Error ? err.message : 'Ошибка') } finally { setLockLoading(false) } }}>
                       <p className="chat-vpn-hint chat-mb-8">Защитить ключи паролем</p>
-                      <input type="password" placeholder="Пароль" value={lockPassphrase} onChange={(e) => { setLockPassphrase(e.target.value); setLockError('') }} className="chat-recipient-input chat-recipient-input-sm" />
-                      <input type="password" placeholder="Подтверждение" value={lockPassphraseConfirm} onChange={(e) => { setLockPassphraseConfirm(e.target.value); setLockError('') }} className="chat-recipient-input chat-recipient-input-sm chat-mt-8" />
+                      <input type="password" placeholder="Пароль" value={lockPassphrase} onChange={(e) => { setLockPassphrase(e.target.value); setLockError('') }} className="chat-recipient-input chat-recipient-input-sm" autoComplete="new-password" />
+                      <input type="password" placeholder="Подтверждение" value={lockPassphraseConfirm} onChange={(e) => { setLockPassphraseConfirm(e.target.value); setLockError('') }} className="chat-recipient-input chat-recipient-input-sm chat-mt-8" autoComplete="new-password" />
                       {lockError && <p className="chat-vpn-proto-hint chat-error-text">{lockError}</p>}
-                      <button className="chat-vpn-btn chat-mt-8" disabled={lockLoading || !lockPassphrase || lockPassphrase !== lockPassphraseConfirm} onClick={async () => { if (!lockPassphrase || lockPassphrase !== lockPassphraseConfirm) return; setLockError(''); setLockLoading(true); try { await lockKeysWithPassphrase(lockPassphrase) } catch (err) { setLockError(err instanceof Error ? err.message : 'Ошибка') } finally { setLockLoading(false) } }}>{lockLoading ? '…' : 'Защитить паролем'}</button>
-                    </div>
+                      <button type="submit" className="chat-vpn-btn chat-mt-8" disabled={lockLoading || !lockPassphrase || lockPassphrase !== lockPassphraseConfirm}>{lockLoading ? '…' : 'Защитить паролем'}</button>
+                    </form>
                   )}
                 </div>
               </div>
@@ -2014,7 +2014,22 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
                 </button>
               </div>
               {lockKeysWithPassphrase && keys && (
-                <div className="chat-mt-10">
+                <form
+                  className="chat-mt-10"
+                  onSubmit={async (e) => {
+                    e.preventDefault()
+                    if (!lockPassphrase || lockPassphrase !== lockPassphraseConfirm) return
+                    setLockError('')
+                    setLockLoading(true)
+                    try {
+                      await lockKeysWithPassphrase(lockPassphrase)
+                    } catch (err) {
+                      setLockError(err instanceof Error ? err.message : 'Ошибка')
+                    } finally {
+                      setLockLoading(false)
+                    }
+                  }}
+                >
                   <p className="chat-vpn-hint chat-mb-8">Защитить ключи паролем (опционально)</p>
                   <input
                     type="password"
@@ -2022,6 +2037,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
                     value={lockPassphrase}
                     onChange={(e) => { setLockPassphrase(e.target.value); setLockError('') }}
                     className="chat-recipient-input chat-recipient-input-sm"
+                    autoComplete="new-password"
                   />
                   <input
                     type="password"
@@ -2029,27 +2045,17 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
                     value={lockPassphraseConfirm}
                     onChange={(e) => { setLockPassphraseConfirm(e.target.value); setLockError('') }}
                     className="chat-recipient-input chat-recipient-input-sm chat-mt-8"
+                    autoComplete="new-password"
                   />
                   {lockError && <p className="chat-vpn-proto-hint chat-error-text">{lockError}</p>}
                   <button
+                    type="submit"
                     className="chat-vpn-btn chat-mt-8"
                     disabled={lockLoading || !lockPassphrase || lockPassphrase !== lockPassphraseConfirm}
-                    onClick={async () => {
-                      if (!lockPassphrase || lockPassphrase !== lockPassphraseConfirm) return
-                      setLockError('')
-                      setLockLoading(true)
-                      try {
-                        await lockKeysWithPassphrase(lockPassphrase)
-                      } catch (err) {
-                        setLockError(err instanceof Error ? err.message : 'Ошибка')
-                      } finally {
-                        setLockLoading(false)
-                      }
-                    }}
                   >
                     {lockLoading ? '…' : 'Защитить паролем'}
                   </button>
-                </div>
+                </form>
               )}
             </div>
           </div>

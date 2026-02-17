@@ -135,6 +135,12 @@ func (h *federationHandler) getKeys(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "userID and deviceID required")
 		return
 	}
+	if u, err := url.PathUnescape(userID); err == nil {
+		userID = u
+	}
+	if d, err := url.PathUnescape(deviceID); err == nil {
+		deviceID = d
+	}
 	bundle, err := h.keydir.GetBundle(r.Context(), userID, deviceID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "Bundle not found")
