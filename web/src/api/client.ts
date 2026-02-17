@@ -430,6 +430,8 @@ export interface LoginRequest {
   username: string
   password: string
   device_id: string
+  /** Домен домашнего сервера для федеративного входа (например astralrelay.online). Пусто = текущий сервер. */
+  domain?: string
   request_keys_restore?: boolean
   keys?: LoginKeys
 }

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+	"github.com/messenger/server/internal/auth"
 	"github.com/messenger/server/internal/db"
 	"github.com/messenger/server/internal/federation"
 	"github.com/messenger/server/internal/keydir"
@@ -29,6 +31,27 @@ type federationHandler struct {
 	mainOnlyDomain  string
 	alertWebhookURL string // optional: POST on rate limit / blocklist
 	db              *db.DB
+	auth            *auth.Service
+}
+
+// authVerifyRequest is the body for federation auth/verify (login on home server from another server).
+type authVerifyRequest struct {
+	UserID            string `json:"user_id"`
+	Password          string `json:"password"`
+	DeviceID          string `json:"device_id"`
+	RequestKeysRestore bool  `json:"request_keys_restore"`
+	Keys              *struct {
+		IdentityKey  string `json:"identity_key"`
+		SignedPrekey struct {
+			Key       string `json:"key"`
+			Signature string `json:"signature"`
+			KeyID     int64  `json:"key_id"`
+		} `json:"signed_prekey"`
+		OneTimePrekeys []struct {
+			Key   string `json:"key"`
+			KeyID int64  `json:"key_id"`
+		} `json:"one_time_prekeys"`
+	} `json:"keys,omitempty"`
 }
 
 func (h *federationHandler) wellKnown(w http.ResponseWriter, r *http.Request) {
@@ -70,6 +93,161 @@ func (h *federationHandler) getKeys(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *federationHandler) authVerify(w http.ResponseWriter, r *http.Request) {
+	if h.auth == nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Auth not configured")
+		return
+	}
+	origin := r.Header.Get("X-Server-Origin")
+	if origin == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "X-Server-Origin required")
+		return
+	}
+	maxBody := h.maxBody
+	if maxBody <= 0 {
+		maxBody = federation.MaxBodySize
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, int64(maxBody)))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid body")
+		return
+	}
+	if h.security != nil && h.security.IsBlocked(origin) {
+		writeError(w, http.StatusForbidden, "blocked", "Domain is blocked")
+		return
+	}
+	originKey, err := federation.FetchServerKey(r.Context(), origin)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid_origin", "Cannot fetch origin server key")
+		return
+	}
+	if err := federation.VerifyRequest(r, body, originKey); err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid_signature", err.Error())
+		return
+	}
+	var req authVerifyRequest
+	if json.Unmarshal(body, &req) != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON")
+		return
+	}
+	req.UserID = strings.TrimSpace(req.UserID)
+	if req.UserID == "" || !strings.HasPrefix(req.UserID, "@") {
+		writeError(w, http.StatusBadRequest, "invalid_request", "user_id required (e.g. @user:domain)")
+		return
+	}
+	parts := strings.SplitN(req.UserID[1:], ":", 2)
+	if len(parts) != 2 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "user_id must be @username:domain")
+		return
+	}
+	username, domain := strings.TrimSpace(parts[0]), strings.ToLower(strings.TrimSpace(parts[1]))
+	if domain != h.domain {
+		writeError(w, http.StatusForbidden, "wrong_domain", "user_id domain does not match this server")
+		return
+	}
+	deviceID, err := uuid.Parse(req.DeviceID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid device_id")
+		return
+	}
+	in := auth.LoginInput{
+		Username:           username,
+		Password:           req.Password,
+		DeviceID:           deviceID,
+		RequestKeysRestore: req.RequestKeysRestore,
+	}
+	if req.Keys != nil {
+		identityKey, _ := base64.StdEncoding.DecodeString(req.Keys.IdentityKey)
+		signedPrekey, _ := base64.StdEncoding.DecodeString(req.Keys.SignedPrekey.Key)
+		signedPrekeySig, _ := base64.StdEncoding.DecodeString(req.Keys.SignedPrekey.Signature)
+		prekeys := make([]auth.PrekeyItem, len(req.Keys.OneTimePrekeys))
+		for i, pk := range req.Keys.OneTimePrekeys {
+			key, _ := base64.StdEncoding.DecodeString(pk.Key)
+			prekeys[i] = auth.PrekeyItem{Key: key, KeyID: pk.KeyID}
+		}
+		in.IdentityKey = identityKey
+		in.SignedPrekey = signedPrekey
+		in.SignedPrekeySig = signedPrekeySig
+		in.SignedPrekeyID = req.Keys.SignedPrekey.KeyID
+		in.OneTimePrekeys = prekeys
+	}
+	result, err := h.auth.Login(r.Context(), in)
+	if err == auth.ErrInvalidCredentials {
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "Invalid credentials")
+		return
+	}
+	if err != nil {
+		logjson.Log("federation_auth_verify", map[string]interface{}{"error": err.Error(), "user_id": req.UserID})
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	out := map[string]interface{}{
+		"access_token": result.Token,
+		"expires_in":   86400,
+		"user_id":      result.UserID,
+		"device_id":    result.DeviceID.String(),
+	}
+	if result.KeysBackup != nil {
+		out["keys_backup"] = map[string]interface{}{
+			"salt": base64.StdEncoding.EncodeToString(result.KeysBackup.Salt),
+			"blob": base64.StdEncoding.EncodeToString(result.KeysBackup.Blob),
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// usersLookup handles GET /federation/v1/users/lookup?username=... — returns user_id and home_domain if this server is the user's home (for federated login discovery).
+func (h *federationHandler) usersLookup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
+		return
+	}
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	if username == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "username query required")
+		return
+	}
+	origin := r.Header.Get("X-Server-Origin")
+	if origin == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "X-Server-Origin required")
+		return
+	}
+	if h.security != nil && h.security.IsBlocked(origin) {
+		writeError(w, http.StatusForbidden, "blocked", "Domain is blocked")
+		return
+	}
+	originKey, err := federation.FetchServerKey(r.Context(), origin)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid_origin", "Cannot fetch origin server key")
+		return
+	}
+	if err := federation.VerifyRequest(r, nil, originKey); err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid_signature", err.Error())
+		return
+	}
+	if h.db == nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "DB not configured")
+		return
+	}
+	var id int64
+	var domain string
+	err = h.db.Pool.QueryRow(r.Context(),
+		`SELECT id, domain FROM users WHERE username = $1 AND domain = $2`,
+		username, h.domain,
+	).Scan(&id, &domain)
+	if err != nil || id == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":"not_found"}`))
+		return
+	}
+	userID := "@" + username + ":" + domain
+	writeJSON(w, http.StatusOK, map[string]string{
+		"user_id":      userID,
+		"home_domain":  domain,
+	})
 }
 
 func (h *federationHandler) transaction(w http.ResponseWriter, r *http.Request) {

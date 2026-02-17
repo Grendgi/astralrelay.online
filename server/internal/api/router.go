@@ -48,7 +48,7 @@ func NewRouter(
 	r.Use(anonymityLogger)
 	r.Use(cors.Handler(corsForDomain(domain)))
 
-	authH := &authHandler{auth: authSvc}
+	authH := &authHandler{auth: authSvc, domain: domain, fedClient: fedClient, db: database}
 	keysH := &keysHandler{keydir: keydirSvc, fed: fedClient}
 	relayH := &relayHandler{relay: relaySvc, rooms: roomsSvc, fed: fedClient, domain: domain, hub: streamHub, push: pushSvc, auth: authSvc, e2eeStrictOnly: e2eeStrictOnly}
 	roomsH := &roomsHandler{rooms: roomsSvc}
@@ -69,6 +69,7 @@ func NewRouter(
 		mainOnlyDomain:  fedMainOnlyDomain,
 		alertWebhookURL: fedAlertWebhook,
 		db:              database,
+		auth:            authSvc,
 	}
 	streamH := &streamHandler{hub: streamHub, auth: authSvc, domain: domain}
 	vpnH := &vpnHandler{vpn: vpnSvc, domain: domain}
@@ -81,6 +82,8 @@ func NewRouter(
 		r.Use(federationLogger)
 		r.Use(federationRecover)
 		r.Get("/keys/bundle/{userID}/{deviceID}", fedH.getKeys)
+		r.With(LimitByIP(30, time.Minute)).Post("/auth/verify", fedH.authVerify)
+		r.With(LimitByIP(60, time.Minute)).Get("/users/lookup", fedH.usersLookup)
 		limit := fedRateLimit
 		if limit <= 0 {
 			limit = 100
@@ -103,6 +106,7 @@ func NewRouter(
 
 		r.Group(func(r chi.Router) {
 			r.Use(AuthMiddleware(authSvc))
+			r.Use(ProxyForwardMiddleware())
 			r.Post("/auth/ws-token", authH.wsToken)
 			r.Post("/auth/logout", authH.logout)
 			r.Get("/auth/devices", authH.listDevices)

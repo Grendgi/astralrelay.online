@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -35,11 +36,12 @@ type registerRequest struct {
 }
 
 type loginRequest struct {
-	Username            string `json:"username"`
-	Password            string `json:"password"`
-	DeviceID            string `json:"device_id"`
-	RequestKeysRestore  bool   `json:"request_keys_restore"`
-	Keys                *struct {
+	Username           string `json:"username"`
+	Password           string `json:"password"`
+	DeviceID           string `json:"device_id"`
+	Domain             string `json:"domain,omitempty"` // optional: home server domain for federated login
+	RequestKeysRestore bool   `json:"request_keys_restore"`
+	Keys               *struct {
 		IdentityKey   string `json:"identity_key"`
 		SignedPrekey  struct {
 			Key       string `json:"key"`
@@ -121,14 +123,66 @@ func (h *authHandler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	username := strings.TrimSpace(req.Username)
+	domain := strings.ToLower(strings.TrimSpace(req.Domain))
+	if strings.Contains(username, "@") {
+		parts := strings.SplitN(username, "@", 2)
+		if len(parts) == 2 {
+			username = strings.TrimSpace(parts[0])
+			if domain == "" {
+				domain = strings.ToLower(strings.TrimSpace(parts[1]))
+			}
+		}
+	}
+	if domain == "" {
+		domain = h.domain
+	}
+
 	deviceID, err := uuid.Parse(req.DeviceID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid device_id")
 		return
 	}
 
+	// Federated login: user's home server is another domain
+	if domain != h.domain && h.fedClient != nil {
+		userID := "@" + username + ":" + domain
+		body := map[string]interface{}{
+			"user_id":             userID,
+			"password":            req.Password,
+			"device_id":           req.DeviceID,
+			"request_keys_restore": req.RequestKeysRestore,
+		}
+		if req.Keys != nil {
+			body["keys"] = req.Keys
+		}
+		bodyBytes, _ := json.Marshal(body)
+		fedRes, err := h.fedClient.AuthVerify(r.Context(), domain, bodyBytes)
+		if err != nil {
+			logjson.Log("federation_login", map[string]interface{}{"error": err.Error(), "domain": domain})
+			writeError(w, http.StatusUnauthorized, "invalid_credentials", "Invalid credentials or federation error")
+			return
+		}
+		localToken, err := h.auth.CreateProxySession(r.Context(), domain, fedRes.AccessToken, fedRes.UserID, fedRes.DeviceID, 24*time.Hour)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+			return
+		}
+		out := map[string]interface{}{
+			"user_id":      fedRes.UserID,
+			"device_id":    fedRes.DeviceID,
+			"access_token": localToken,
+			"expires_in":   86400,
+		}
+		if fedRes.KeysBackup != nil {
+			out["keys_backup"] = fedRes.KeysBackup
+		}
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+
 	in := auth.LoginInput{
-		Username:           req.Username,
+		Username:           username,
 		Password:           req.Password,
 		DeviceID:           deviceID,
 		RequestKeysRestore: req.RequestKeysRestore,
@@ -150,28 +204,75 @@ func (h *authHandler) login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := h.auth.Login(r.Context(), in)
-	if err == auth.ErrInvalidCredentials {
-		writeError(w, http.StatusUnauthorized, "invalid_credentials", "Invalid credentials")
+	if err == nil {
+		out := map[string]interface{}{
+			"user_id":      res.UserID,
+			"device_id":    res.DeviceID.String(),
+			"access_token": res.Token,
+			"expires_in":   86400,
+		}
+		if res.KeysBackup != nil {
+			out["keys_backup"] = map[string]string{
+				"salt": base64.StdEncoding.EncodeToString(res.KeysBackup.Salt),
+				"blob": base64.StdEncoding.EncodeToString(res.KeysBackup.Blob),
+			}
+		}
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	if err != nil {
+	if err != auth.ErrInvalidCredentials {
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
 	}
 
-	out := map[string]interface{}{
-		"user_id":      res.UserID,
-		"device_id":    res.DeviceID.String(),
-		"access_token": res.Token,
-		"expires_in":   86400,
-	}
-	if res.KeysBackup != nil {
-		out["keys_backup"] = map[string]string{
-			"salt": base64.StdEncoding.EncodeToString(res.KeysBackup.Salt),
-			"blob": base64.StdEncoding.EncodeToString(res.KeysBackup.Blob),
+	// Local user not found or wrong password — try to discover home server via federation
+	if h.fedClient != nil && h.db != nil {
+		rows, qErr := h.db.Pool.Query(r.Context(), `SELECT domain FROM federation_peers WHERE allowed = TRUE AND domain != $1`, h.domain)
+		if qErr == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var peerDomain string
+				if rows.Scan(&peerDomain) == nil {
+					if _, homeDomain, found := h.fedClient.UserLookup(r.Context(), peerDomain, username); found {
+						domain = homeDomain
+						break
+					}
+				}
+			}
+		}
+		if domain != h.domain {
+			userID := "@" + username + ":" + domain
+			body := map[string]interface{}{
+				"user_id":             userID,
+				"password":            req.Password,
+				"device_id":           req.DeviceID,
+				"request_keys_restore": req.RequestKeysRestore,
+			}
+			if req.Keys != nil {
+				body["keys"] = req.Keys
+			}
+			bodyBytes, _ := json.Marshal(body)
+			fedRes, fedErr := h.fedClient.AuthVerify(r.Context(), domain, bodyBytes)
+			if fedErr == nil {
+				localToken, createErr := h.auth.CreateProxySession(r.Context(), domain, fedRes.AccessToken, fedRes.UserID, fedRes.DeviceID, 24*time.Hour)
+				if createErr == nil {
+					out := map[string]interface{}{
+						"user_id":      fedRes.UserID,
+						"device_id":    fedRes.DeviceID,
+						"access_token": localToken,
+						"expires_in":   86400,
+					}
+					if fedRes.KeysBackup != nil {
+						out["keys_backup"] = fedRes.KeysBackup
+					}
+					writeJSON(w, http.StatusOK, out)
+					return
+				}
+			}
 		}
 	}
-	writeJSON(w, http.StatusOK, out)
+
+	writeError(w, http.StatusUnauthorized, "invalid_credentials", "Invalid credentials")
 }
 
 func (h *authHandler) wsToken(w http.ResponseWriter, r *http.Request) {

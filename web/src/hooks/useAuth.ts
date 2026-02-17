@@ -132,7 +132,7 @@ export function useAuth() {
   )
 
   const login = useCallback(
-    async (username: string, password: string) => {
+    async (username: string, password: string, domain?: string) => {
       const storedDeviceId = localStorage.getItem('device_id')
       const migrated = await migrateKeysFromLocalStorage()
       const storedKeys = migrated ?? (await getKeysFromStorage())
@@ -149,6 +149,7 @@ export function useAuth() {
         device_id: devId,
         request_keys_restore: needKeysRestore,
       }
+      if (domain) body.domain = domain
       if (keys) {
         body.keys = {
           identity_key: keys.identityKey,

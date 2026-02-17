@@ -6,7 +6,7 @@ import { Register } from './Register'
 interface LandingProps {
   showRegister: boolean
   onShowRegisterChange: (show: boolean) => void
-  onLogin: (username: string, password: string) => Promise<void>
+  onLogin: (username: string, password: string, domain?: string) => Promise<void>
   onRegister: (username: string, password: string) => Promise<void>
 }
 

@@ -2,9 +2,12 @@ package api
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/messenger/server/internal/auth"
+	"github.com/messenger/server/internal/db"
+	"github.com/messenger/server/internal/federation"
 )
 
 type AuthService interface {
@@ -18,8 +21,13 @@ type AuthService interface {
 	ListDevices(ctx context.Context, userID int64, currentDeviceID uuid.UUID) ([]auth.DeviceInfo, error)
 	RevokeDevice(ctx context.Context, userID int64, deviceID uuid.UUID) error
 	RenameDevice(ctx context.Context, userID int64, deviceID uuid.UUID, name string) error
+	CreateProxySession(ctx context.Context, homeDomain, homeToken, userID, deviceID string, expiresIn time.Duration) (localToken string, err error)
+	GetProxySessionByToken(ctx context.Context, token string) (*auth.ProxySession, error)
 }
 
 type authHandler struct {
-	auth AuthService
+	auth      AuthService
+	domain    string
+	fedClient *federation.Client
+	db        *db.DB
 }

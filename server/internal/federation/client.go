@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -287,4 +288,86 @@ func (c *Client) ForwardTransaction(ctx context.Context, targetDomain string, tx
 		return fmt.Errorf("federation forward: %d %s", resp.StatusCode, string(data))
 	}
 	return nil
+}
+
+// UserLookupResult is the response from federation users/lookup (username → home server).
+type UserLookupResult struct {
+	UserID     string `json:"user_id"`
+	HomeDomain string `json:"home_domain"`
+}
+
+// UserLookup asks a remote server if it is the home server for the given username. Returns (userID, homeDomain, true) if found, else ("", "", false).
+func (c *Client) UserLookup(ctx context.Context, remoteDomain, username string) (userID, homeDomain string, found bool) {
+	endpoint, err := c.resolveEndpoint(ctx, remoteDomain)
+	if err != nil {
+		return "", "", false
+	}
+	path := strings.TrimSuffix(endpoint, "/") + "/users/lookup"
+	urlStr := path + "?username=" + url.QueryEscape(username)
+	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	if err != nil {
+		return "", "", false
+	}
+	for k, v := range c.signRequest("GET", urlStr, "") {
+		req.Header.Set(k, v)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return "", "", false
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", "", false
+	}
+	var result UserLookupResult
+	if json.NewDecoder(resp.Body).Decode(&result) != nil {
+		return "", "", false
+	}
+	if result.UserID == "" || result.HomeDomain == "" {
+		return "", "", false
+	}
+	return result.UserID, result.HomeDomain, true
+}
+
+// AuthVerifyResult is the response from a federation auth/verify call.
+type AuthVerifyResult struct {
+	AccessToken string            `json:"access_token"`
+	ExpiresIn   int               `json:"expires_in"`
+	UserID      string            `json:"user_id"`
+	DeviceID    string            `json:"device_id"`
+	KeysBackup  map[string]string `json:"keys_backup,omitempty"`
+}
+
+// AuthVerify calls the remote server's federation auth/verify to log in a user (for federated login).
+func (c *Client) AuthVerify(ctx context.Context, remoteDomain string, body []byte) (*AuthVerifyResult, error) {
+	endpoint, err := c.resolveEndpoint(ctx, remoteDomain)
+	if err != nil {
+		return nil, err
+	}
+	url := strings.TrimSuffix(endpoint, "/") + "/auth/verify"
+	req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range c.signRequest("POST", url, string(body)) {
+		req.Header.Set(k, v)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("federation auth/verify: %d %s", resp.StatusCode, string(data))
+	}
+	var result AuthVerifyResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }

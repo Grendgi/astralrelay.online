@@ -2,7 +2,9 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -614,4 +616,55 @@ func (s *Service) CleanupExpiredTokens(ctx context.Context) (deleted int64, err 
 		return 0, err
 	}
 	return res.RowsAffected(), nil
+}
+
+// ProxySession holds data for a federated login session (user logged in on this server with home server credentials).
+type ProxySession struct {
+	HomeDomain string
+	HomeToken  string
+	UserID     string
+	DeviceID   string
+}
+
+// CreateProxySession stores a proxy session and returns a token the client will use for this server.
+func (s *Service) CreateProxySession(ctx context.Context, homeDomain, homeToken, userID, deviceID string, expiresIn time.Duration) (localToken string, err error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	localToken = hex.EncodeToString(b)
+	h := sha256.Sum256(b)
+	expiresAt := time.Now().Add(expiresIn)
+	_, err = s.db.Pool.Exec(ctx,
+		`INSERT INTO proxy_sessions (token_hash, home_domain, home_token, user_id, device_id, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		h[:], homeDomain, homeToken, userID, deviceID, expiresAt,
+	)
+	if err != nil {
+		return "", err
+	}
+	return localToken, nil
+}
+
+// GetProxySessionByToken returns proxy session if the token is valid and not expired.
+func (s *Service) GetProxySessionByToken(ctx context.Context, token string) (*ProxySession, error) {
+	h := sha256.Sum256([]byte(token))
+	var homeDomain, homeToken, userID, deviceID string
+	var expiresAt time.Time
+	err := s.db.Pool.QueryRow(ctx,
+		`SELECT home_domain, home_token, user_id, device_id, expires_at
+		 FROM proxy_sessions WHERE token_hash = $1`,
+		h[:],
+	).Scan(&homeDomain, &homeToken, &userID, &deviceID, &expiresAt)
+	if err == pgx.ErrNoRows {
+		return nil, ErrInvalidToken
+	}
+	if err != nil {
+		return nil, err
+	}
+	if time.Now().After(expiresAt) {
+		_, _ = s.db.Pool.Exec(ctx, `DELETE FROM proxy_sessions WHERE token_hash = $1`, h[:])
+		return nil, ErrInvalidToken
+	}
+	return &ProxySession{HomeDomain: homeDomain, HomeToken: homeToken, UserID: userID, DeviceID: deviceID}, nil
 }
