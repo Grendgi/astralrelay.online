@@ -1781,6 +1781,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
                   </div>
                   {lockKeysWithPassphrase && keys && (
                     <form className="chat-mt-10" onSubmit={async (e) => { e.preventDefault(); if (!lockPassphrase || lockPassphrase !== lockPassphraseConfirm) return; setLockError(''); setLockLoading(true); try { await lockKeysWithPassphrase(lockPassphrase) } catch (err) { setLockError(err instanceof Error ? err.message : 'Ошибка') } finally { setLockLoading(false) } }}>
+                      <input type="text" name="username" autoComplete="off" tabIndex={-1} style={{ position: 'absolute', left: '-9999px', width: 1, height: 1, opacity: 0 }} aria-hidden />
                       <p className="chat-vpn-hint chat-mb-8">Защитить ключи паролем</p>
                       <input type="password" placeholder="Пароль" value={lockPassphrase} onChange={(e) => { setLockPassphrase(e.target.value); setLockError('') }} className="chat-recipient-input chat-recipient-input-sm" autoComplete="new-password" />
                       <input type="password" placeholder="Подтверждение" value={lockPassphraseConfirm} onChange={(e) => { setLockPassphraseConfirm(e.target.value); setLockError('') }} className="chat-recipient-input chat-recipient-input-sm chat-mt-8" autoComplete="new-password" />
@@ -2030,6 +2031,7 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
                     }
                   }}
                 >
+                  <input type="text" name="username" autoComplete="off" tabIndex={-1} style={{ position: 'absolute', left: '-9999px', width: 1, height: 1, opacity: 0 }} aria-hidden />
                   <p className="chat-vpn-hint chat-mb-8">Защитить ключи паролем (опционально)</p>
                   <input
                     type="password"

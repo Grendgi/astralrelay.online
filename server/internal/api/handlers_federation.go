@@ -143,6 +143,7 @@ func (h *federationHandler) getKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	bundle, err := h.keydir.GetBundle(r.Context(), userID, deviceID)
 	if err != nil {
+		logjson.Log("federation_getkeys", map[string]interface{}{"user_id": userID, "device_id": deviceID, "error": err.Error()})
 		writeError(w, http.StatusNotFound, "not_found", "Bundle not found")
 		return
 	}
