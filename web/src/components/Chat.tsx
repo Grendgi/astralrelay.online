@@ -1165,6 +1165,15 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
       return
     }
     if (keys && !isRoomAddr(r) && e2eeMode === 'strict') {
+      try {
+        await api.getKeys(r, token)
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) {
+          setSendHint('Ключи получателя недоступны')
+          setSendHintError(true)
+          return
+        }
+      }
       let deviceIds: string[] = []
       try {
         const { devices } = await api.getRecipientDevices(r, token)
@@ -1281,6 +1290,15 @@ export function Chat({ user, token, keys, onLogout, addOtpks, rotateSignedPrekey
       return
     }
     if (keys && !isRoomAddr(r) && e2eeMode === 'strict') {
+      try {
+        await api.getKeys(r, token)
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) {
+          setSendHint('Ключи получателя недоступны')
+          setSendHintError(true)
+          return
+        }
+      }
       let deviceIds: string[] = []
       try {
         const { devices } = await api.getRecipientDevices(r, token)
