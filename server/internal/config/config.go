@@ -32,20 +32,20 @@ type VPNConfig struct {
 }
 
 type XrayVPNConfig struct {
-	Enabled     bool
-	Endpoint    string // host:port for client URLs, e.g. vpn.example.org:443
-	APIAddr     string // gRPC API address for AddUser/RemoveUser, e.g. xray:10085 (empty = skip API)
-	VmessPort   int    // override port for VMess URL (0 = use from Endpoint)
-	VlessPort   int    // override port for VLESS URL
-	TrojanPort  int    // override port for Trojan URL
+	Enabled    bool
+	Endpoint   string // host:port for client URLs, e.g. vpn.example.org:443
+	APIAddr    string // gRPC API address for AddUser/RemoveUser, e.g. xray:10085 (empty = skip API)
+	VmessPort  int    // override port for VMess URL (0 = use from Endpoint)
+	VlessPort  int    // override port for VLESS URL
+	TrojanPort int    // override port for Trojan URL
 }
 
 type WireGuardVPNConfig struct {
-	Enabled           bool
-	Endpoint          string
-	ServerPubKey      string
-	ClientSubnet      string
-	StatsInterface    string // e.g. "wg0" - if set, fetch traffic via `wg show`
+	Enabled        bool
+	Endpoint       string
+	ServerPubKey   string
+	ClientSubnet   string
+	StatsInterface string // e.g. "wg0" - if set, fetch traffic via `wg show`
 }
 
 type OpenVPNVPNConfig struct {
@@ -54,25 +54,25 @@ type OpenVPNVPNConfig struct {
 }
 
 type ServerConfig struct {
-	Domain        string
-	Port          int
-	Debug         bool
+	Domain         string
+	Port           int
+	Debug          bool
 	E2EEStrictOnly bool // if true, reject non-Signal (MVP/plain) messages
 }
 
 type DatabaseConfig struct {
-	URL               string
-	FederationURL     string // optional: messenger_federation user for AcceptTransaction
-	EncryptionKey     string // base64 32-byte, optional; if set, sensitive columns are encrypted
+	URL           string
+	FederationURL string // optional: messenger_federation user for AcceptTransaction
+	EncryptionKey string // base64 32-byte, optional; if set, sensitive columns are encrypted
 }
 
 type S3Config struct {
-	Endpoint        string
-	AccessKey       string
-	SecretKey       string
-	Bucket          string
-	UseSSL          bool
-	Region          string
+	Endpoint  string
+	AccessKey string
+	SecretKey string
+	Bucket    string
+	UseSSL    bool
+	Region    string
 }
 
 type RedisConfig struct {
@@ -95,15 +95,15 @@ type FederationMTLSConfig struct {
 }
 
 type FederationSecurityConfig struct {
-	RateLimit             int    // per domain per minute
-	MaxBodySize           int    // bytes
-	AllowlistMode         string // auto, manual, open
-	AllowlistPath         string
-	AllowlistTrustThreshold int  // auto mode: min successful transactions before add (default 1)
-	BlocklistPath         string
-	BlocklistURL          string
-	BlocklistReload       int    // hours
-	AlertWebhookURL       string // optional: POST on rate limit / blocklist
+	RateLimit               int    // per domain per minute
+	MaxBodySize             int    // bytes
+	AllowlistMode           string // auto, manual, open
+	AllowlistPath           string
+	AllowlistTrustThreshold int // auto mode: min successful transactions before add (default 1)
+	BlocklistPath           string
+	BlocklistURL            string
+	BlocklistReload         int    // hours
+	AlertWebhookURL         string // optional: POST on rate limit / blocklist
 }
 
 func Load() (*Config, error) {
@@ -118,15 +118,15 @@ func Load() (*Config, error) {
 	e2eeStrictOnly, _ := strconv.ParseBool(getEnv("E2EE_STRICT_ONLY", "false"))
 	cfg := &Config{
 		Server: ServerConfig{
-			Domain:        domain,
-			Port:          port,
-			Debug:         debug,
+			Domain:         domain,
+			Port:           port,
+			Debug:          debug,
 			E2EEStrictOnly: e2eeStrictOnly,
 		},
 		Database: DatabaseConfig{
-			URL:               dbURL,
-			FederationURL:     getEnv("DATABASE_FEDERATION_URL", ""),
-			EncryptionKey:     getEnv("DB_ENCRYPTION_KEY", ""),
+			URL:           dbURL,
+			FederationURL: getEnv("DATABASE_FEDERATION_URL", ""),
+			EncryptionKey: getEnv("DB_ENCRYPTION_KEY", ""),
 		},
 		S3: S3Config{
 			Endpoint:  getEnv("S3_ENDPOINT", "http://localhost:9000"),

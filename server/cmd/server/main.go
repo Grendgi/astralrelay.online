@@ -11,18 +11,18 @@ import (
 	"time"
 
 	"github.com/messenger/server/internal/api"
-	"github.com/messenger/server/internal/logjson"
 	"github.com/messenger/server/internal/auth"
 	"github.com/messenger/server/internal/config"
 	"github.com/messenger/server/internal/db"
 	"github.com/messenger/server/internal/dbenc"
 	"github.com/messenger/server/internal/federation"
 	"github.com/messenger/server/internal/keydir"
-	"github.com/messenger/server/internal/stream"
+	"github.com/messenger/server/internal/logjson"
 	"github.com/messenger/server/internal/media"
 	"github.com/messenger/server/internal/push"
 	"github.com/messenger/server/internal/relay"
 	"github.com/messenger/server/internal/rooms"
+	"github.com/messenger/server/internal/stream"
 	"github.com/messenger/server/internal/vpn"
 )
 

@@ -66,6 +66,10 @@ INSTALL_AUTO=1 INSTALL_MODE=selfhost sudo ./install.sh
 # или INSTALL_MODE=main для главного хаба
 ```
 
+### Обновление на своих серверах
+
+Повторный запуск bootstrap → в мастере **3** (обновить текущую установку), либо после `git pull`: `sudo ./scripts/update.sh`. Подробнее: [docs/DOWNLOAD-AND-UPDATE.md](docs/DOWNLOAD-AND-UPDATE.md).
+
 ---
 
 ## 📐 Архитектура

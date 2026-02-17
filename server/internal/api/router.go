@@ -5,21 +5,21 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/messenger/server/internal/logjson"
-	"github.com/go-chi/cors"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/go-chi/cors"
 	"github.com/messenger/server/internal/auth"
 	"github.com/messenger/server/internal/db"
 	"github.com/messenger/server/internal/dbenc"
 	"github.com/messenger/server/internal/federation"
 	"github.com/messenger/server/internal/keydir"
+	"github.com/messenger/server/internal/logjson"
 	"github.com/messenger/server/internal/media"
 	"github.com/messenger/server/internal/push"
 	"github.com/messenger/server/internal/relay"
 	"github.com/messenger/server/internal/rooms"
 	"github.com/messenger/server/internal/stream"
 	"github.com/messenger/server/internal/vpn"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func NewRouter(

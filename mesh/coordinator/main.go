@@ -50,14 +50,14 @@ type Peer struct {
 }
 
 type Coordinator struct {
-	mu            sync.Mutex
-	nodes         []Node
-	nextIP        int
-	token         string
-	backupSecret  string
-	storagePath   string
-	routesDir     string   // директория для Traefik dynamic routes
-	ca            *caLoader // mTLS CA for federation client certs (optional)
+	mu           sync.Mutex
+	nodes        []Node
+	nextIP       int
+	token        string
+	backupSecret string
+	storagePath  string
+	routesDir    string    // директория для Traefik dynamic routes
+	ca           *caLoader // mTLS CA for federation client certs (optional)
 }
 
 func (c *Coordinator) load() {
@@ -69,10 +69,10 @@ func (c *Coordinator) load() {
 		return
 	}
 	var state struct {
-		Nodes   []Node `json:"nodes"`
-		NextIP  int    `json:"next_ip"`
-		Token   string `json:"token"`
-		Backup  string `json:"backup_secret"`
+		Nodes  []Node `json:"nodes"`
+		NextIP int    `json:"next_ip"`
+		Token  string `json:"token"`
+		Backup string `json:"backup_secret"`
 	}
 	if json.Unmarshal(data, &state) == nil {
 		c.nodes = state.Nodes

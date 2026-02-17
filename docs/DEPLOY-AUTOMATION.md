@@ -5,6 +5,7 @@
 - **bootstrap.sh** — установка в один клик: `curl -fsSL .../bootstrap.sh | sudo sh`. Мастер: main (1), selfhost (2), обновление (3). Рекомендуемый способ первичной установки.
 - **install.sh** — универсальный мастер (main / selfhost / update). Вызывается из bootstrap или из клона репозитория. Настраивает Docker, UFW (порты по роли), секреты, coordinator на main.
 - **install-selfhost.sh** — только self-host (без выбора main/selfhost), домен главного по умолчанию `astralrelay.online`.
+- **scripts/update.sh** — обновление при установке через git: подтянуть код и перезапустить (вызов `install.sh --action update` с автоопределением main/selfhost). Подробнее: [DOWNLOAD-AND-UPDATE.md](DOWNLOAD-AND-UPDATE.md).
 
 Поддерживается nip.io/sslip.io — домен по IP без покупки.
 
