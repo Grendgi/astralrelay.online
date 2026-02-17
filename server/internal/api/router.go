@@ -165,11 +165,15 @@ func NewRouter(
 }
 
 // anonymityLogger logs method, path, status, latency — без IP и user_id (анонимность).
+// Skip logging for successful messages/sync (poll every ~5s) to reduce noise.
 func anonymityLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 		next.ServeHTTP(ww, r)
+		if r.URL.Path == "/api/v1/messages/sync" && ww.Status() == http.StatusOK {
+			return
+		}
 		logjson.Log("api", map[string]interface{}{
 			"method": r.Method, "path": r.URL.Path, "status": ww.Status(), "duration_ms": time.Since(start).Milliseconds(),
 		})
