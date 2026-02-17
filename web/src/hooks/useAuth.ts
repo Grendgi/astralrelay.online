@@ -140,7 +140,8 @@ export function useAuth() {
       const needKeysRestore = !storedKeys
       const devId = storedDeviceId || randomUUID()
       let keys: { identityKey: string; identitySecret: string; signedPrekey: { key: string; signature: string; secret: string; key_id?: number }; oneTimePrekeys: OneTimePrekeyEntry[] } | null = null
-      if (isNewDevice && !needKeysRestore) {
+      // New device always needs keys in request; server creates device. If server returns keys_backup, we restore instead.
+      if (isNewDevice) {
         keys = (await generateKeys()) as any
       }
       const body: Parameters<typeof api.login>[0] = {
