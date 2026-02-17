@@ -81,11 +81,15 @@ func (h *keysHandler) getBundleForUser(w http.ResponseWriter, r *http.Request) {
 	}
 	devices, fedErr := h.fed.FetchDeviceList(r.Context(), domain, userID)
 	if fedErr != nil || len(devices) == 0 {
+		if fedErr != nil {
+			logjson.Log("federation_keys", map[string]interface{}{"user_id": userID, "domain": domain, "step": "devices", "error": fedErr.Error()})
+		}
 		writeError(w, http.StatusNotFound, "not_found", "Bundle not found")
 		return
 	}
 	data, fedErr := h.fed.FetchKeys(r.Context(), domain, userID, devices[0])
 	if fedErr != nil {
+		logjson.Log("federation_keys", map[string]interface{}{"user_id": userID, "domain": domain, "step": "bundle", "error": fedErr.Error()})
 		writeError(w, http.StatusNotFound, "not_found", "Bundle not found")
 		return
 	}
@@ -243,6 +247,7 @@ func (h *keysHandler) getBundle(w http.ResponseWriter, r *http.Request) {
 				w.Write(data)
 				return
 			}
+			logjson.Log("federation_keys", map[string]interface{}{"user_id": userID, "device_id": deviceID, "domain": domain, "step": "bundle", "error": fedErr.Error()})
 		}
 	}
 	if err == keydir.ErrRemoteUser {

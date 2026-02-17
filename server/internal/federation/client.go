@@ -287,9 +287,9 @@ func (c *Client) FetchKeys(ctx context.Context, remoteDomain, userID, deviceID s
 	if err != nil {
 		return nil, err
 	}
-	url := fmt.Sprintf("%s/keys/bundle/%s/%s", strings.TrimSuffix(endpoint, "/"), userID, deviceID)
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-	for k, v := range c.signRequest("GET", url, "") {
+	path := strings.TrimSuffix(endpoint, "/") + "/keys/bundle/" + url.PathEscape(userID) + "/" + url.PathEscape(deviceID)
+	req, _ := http.NewRequestWithContext(ctx, "GET", path, nil)
+	for k, v := range c.signRequest("GET", path, "") {
 		req.Header.Set(k, v)
 	}
 	resp, err := c.httpClient.Do(req)
